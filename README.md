@@ -1,7 +1,7 @@
 # BTS – Book To Speech
 
-> Local neural text-to-speech powered by [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M).  
-> Reads text, text files and EPUB books aloud, or exports them to FLAC/MP3.  
+> Local neural text-to-speech powered by [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M).
+> Reads text, text files and EPUB books aloud, or exports them to FLAC/MP3.
 > No cloud. No API key. Runs entirely on your machine.
 
 ---
@@ -22,7 +22,7 @@
 `espeak-ng` (es/fr/it/pt), and `libhunspell` + a Hunspell dictionary for `--analyze`.
 
 ```bash
-git clone https://github.com/tu-usuario/bts.git
+git clone https://github.com/serantes/bts.git
 cd bts
 ./scripts/bts_init.sh          # creates .venv and installs bts with all extras
 ```
