@@ -300,8 +300,166 @@ def build_parser() -> argparse.ArgumentParser:
             "using preset presentation text."
         ),
     )
+    parser.add_argument(
+        "--no-daemon",
+        action="store_true",
+        dest="no_daemon",
+        help=(
+            "Bypass the daemon and run in standalone mode even if the "
+            "BTS daemon is active."
+        ),
+    )
     return parser
 
+
+# ---------------------------------------------------------------------------
+# Daemon management
+# ---------------------------------------------------------------------------
+
+def _handle_daemon_command(argv: list[str]) -> int:
+    """Parse and execute ``bts daemon <action>`` subcommands.
+
+    Args:
+        argv: Everything after ``bts daemon`` on the command line.
+
+    Returns:
+        Process exit status.
+    """
+    import argparse as _ap
+
+    p = _ap.ArgumentParser(
+        prog="bts daemon",
+        description="Manage the BTS background daemon.",
+    )
+    sub = p.add_subparsers(dest="action")
+
+    start_p = sub.add_parser(
+        "start", help="Start the daemon in background."
+    )
+    start_p.add_argument(
+        "--fg",
+        action="store_true",
+        help="Run in the foreground instead of background.",
+    )
+    start_p.add_argument(
+        "--timeout",
+        type=int,
+        default=30,
+        metavar="MINUTES",
+        help=(
+            "Inactivity timeout in minutes (0 = never shutdown). "
+            "Default: 30."
+        ),
+    )
+
+    sub.add_parser("stop", help="Stop the running daemon.")
+    sub.add_parser("status", help="Show daemon status.")
+
+    parsed = p.parse_args(argv)
+    if parsed.action is None:
+        p.print_help()
+        return 1
+
+    if parsed.action == "start":
+        return _daemon_start(parsed.fg, parsed.timeout * 60)
+    if parsed.action == "stop":
+        return _daemon_stop()
+    if parsed.action == "status":
+        return _daemon_status()
+    return 1
+
+
+def _daemon_start(foreground: bool, timeout_seconds: int) -> int:
+    """Start the BTS daemon."""
+    from bts.client import ping_daemon
+    from bts.daemon import LOG_PATH, run_daemon
+
+    if ping_daemon():
+        print("[INFO] BTS daemon is already running.")
+        return 0
+
+    if foreground:
+        print(
+            "[INFO] Starting BTS daemon in foreground "
+            "(press Ctrl+C to stop)…"
+        )
+        run_daemon(inactivity_timeout=timeout_seconds)
+        return 0
+
+    # Background mode: redirect output to a log file.
+    import subprocess
+    import time
+
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = LOG_PATH.open("w", encoding="utf-8")
+    try:
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "bts.daemon",
+                f"--timeout={timeout_seconds // 60}",
+            ],
+            stdout=log_fh,
+            stderr=log_fh,
+            start_new_session=True,
+        )
+    finally:
+        log_fh.close()  # Parent does not need the file; child keeps it open.
+
+    # Wait up to 3 s for the daemon to become responsive.
+    for _ in range(30):
+        time.sleep(0.1)
+        if ping_daemon():
+            print(
+                f"[INFO] BTS daemon started (PID {proc.pid}). "
+                f"Logs: {LOG_PATH}"
+            )
+            return 0
+
+    print(
+        f"[WARNING] Daemon process started (PID {proc.pid}) but is not "
+        "responding yet — it may still be loading the model."
+    )
+    return 0
+
+
+def _daemon_stop() -> int:
+    """Stop the running BTS daemon."""
+    from bts.client import stop_daemon
+
+    if stop_daemon():
+        print("[INFO] BTS daemon stopped.")
+    else:
+        print("[INFO] No BTS daemon is running.")
+    return 0
+
+
+def _daemon_status() -> int:
+    """Print the status of the BTS daemon."""
+    from bts.client import get_daemon_status
+    from bts.daemon import PID_PATH, SOCKET_PATH
+
+    status = get_daemon_status()
+    if status:
+        print(f"[INFO] Active — {status}")
+        return 0
+
+    # Check for stale files left by a crash.
+    if SOCKET_PATH.exists() or PID_PATH.exists():
+        print(
+            "[INFO] Daemon appears to have crashed "
+            "(socket or PID file exists but daemon is unresponsive)."
+        )
+        return 1
+
+    print("[INFO] No BTS daemon is running.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Argument preparation
+# ---------------------------------------------------------------------------
 
 def prepare_synthesis(
     args: argparse.Namespace,
@@ -430,6 +588,29 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         device = "cpu"
         lexicon = PronunciationDictionary({})
         if not args.section_list:
+            if not args.no_daemon:
+                from bts.client import try_daemon_request
+
+                result = try_daemon_request(
+                    {
+                        "action": "epub",
+                        "epub_path": args.epub,
+                        "lang": args.lang,
+                        "voice": args.voice,
+                        "speed": args.speed,
+                        "device": args.device,
+                        "output": args.output,
+                        "format": audio_format,
+                        "mp3_quality": args.mp3_quality,
+                        "section_start": args.section_start,
+                        "dictionary": args.dictionary,
+                        "dictionary_ignore_case": (
+                            args.dictionary_ignore_case
+                        ),
+                    }
+                )
+                if result is not None:
+                    return result
             lexicon = load_lexicon(args)
             device = prepare_synthesis(
                 args,
@@ -472,6 +653,28 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         path, audio_format = resolve_audio_output(
             args.output, args.format, default_name
         )
+        if not args.no_daemon:
+            from bts.client import try_daemon_request
+
+            result = try_daemon_request(
+                {
+                    "action": "save",
+                    "text": text_to_speak,
+                    "output": path,
+                    "lang": args.lang,
+                    "voice": args.voice,
+                    "speed": args.speed,
+                    "device": args.device,
+                    "format": audio_format,
+                    "mp3_quality": args.mp3_quality,
+                    "dictionary": args.dictionary,
+                    "dictionary_ignore_case": (
+                        args.dictionary_ignore_case
+                    ),
+                }
+            )
+            if result is not None:
+                return result
         lexicon = load_lexicon(args)
         device = prepare_synthesis(
             args,
@@ -490,6 +693,26 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             mp3_quality=args.mp3_quality,
         )
         return 0
+
+    # Play mode.  --display requires a foreground process (karaoke), so it
+    # always runs standalone even if the daemon is active.
+    if not args.no_daemon and not args.display:
+        from bts.client import try_daemon_request
+
+        result = try_daemon_request(
+            {
+                "action": "play",
+                "text": text_to_speak,
+                "lang": args.lang,
+                "voice": args.voice,
+                "speed": args.speed,
+                "device": args.device,
+                "dictionary": args.dictionary,
+                "dictionary_ignore_case": args.dictionary_ignore_case,
+            }
+        )
+        if result is not None:
+            return result
 
     lexicon = load_lexicon(args)
     device = prepare_synthesis(args, needs_player=True, lang_code=args.lang)
@@ -513,8 +736,16 @@ def main(argv: list | None = None) -> int:
     Returns:
         The process exit status.
     """
+    # Resolve the actual argument list so we can inspect it before argparse.
+    _argv = list(sys.argv[1:]) if argv is None else list(argv)
+
+    # Intercept 'bts daemon ...' before the standard parser so it does not
+    # need to be a registered positional argument.
+    if _argv and _argv[0] == "daemon":
+        return _handle_daemon_command(_argv[1:])
+
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(_argv)
     try:
         return run(args, parser)
     except GpuMemoryError as exc:
