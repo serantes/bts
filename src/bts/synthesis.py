@@ -34,7 +34,7 @@ from bts.languages import (
     TEST_TEXTS,
     get_default_voice,
 )
-from bts.phonemes import chunk_phonemes, strip_phoneme_markup
+from bts.phonemes import _split_phonemes, chunk_phonemes, strip_phoneme_markup
 from bts.textio import split_into_chunks
 
 if TYPE_CHECKING:
@@ -77,11 +77,12 @@ def _generate_with_phonemes(
                     if audio is not None:
                         yield graphemes, audio
                 continue
-            for _, _, audio in pipeline.generate_from_tokens(
-                phonemes, voice=voice, speed=speed
-            ):
-                if audio is not None:
-                    yield plain, audio
+            for sub_phonemes in _split_phonemes(phonemes):
+                for _, _, audio in pipeline.generate_from_tokens(
+                    sub_phonemes, voice=voice, speed=speed
+                ):
+                    if audio is not None:
+                        yield plain, audio
 
 
 def generate_speech(

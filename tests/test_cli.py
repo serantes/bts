@@ -99,7 +99,15 @@ def test_run_analyze_with_ipa_lang_dispatches(monkeypatch):
 
 @pytest.fixture
 def spy(monkeypatch):
-    """Replace every heavy action with a recorder."""
+    """Replace every heavy action with a recorder.
+
+    Also stubs ``try_daemon_request`` to always return ``None`` so the tests
+    are independent of whether a BTS daemon happens to be running in the
+    background.  Without this stub the CLI would delegate to the daemon and
+    bypass the monkeypatched synthesis functions, causing KeyError failures.
+    """
+    import bts.client as _client
+
     calls = {}
     monkeypatch.setattr(cli, "prepare_synthesis", lambda args, **kw: "cpu")
     monkeypatch.setattr(
@@ -114,6 +122,8 @@ def spy(monkeypatch):
     monkeypatch.setattr(
         cli, "process_epub_book", lambda **kw: calls.update(epub=kw) or 0
     )
+    # Prevent delegation to a live daemon so the stubs above are always reached.
+    monkeypatch.setattr(_client, "try_daemon_request", lambda req: None)
     return calls
 
 

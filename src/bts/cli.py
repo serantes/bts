@@ -69,6 +69,7 @@ from bts.languages import (
     show_voices,
     validate_voice,
 )
+from bts.numbers import prepare_text
 from bts.synthesis import (
     run_voice_tests,
     synthesize_and_play,
@@ -542,6 +543,20 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         show_voices(lang_filter=args.list_voices)
         return 0
 
+    # Infer missing extensions.
+    if args.epub and not os.path.splitext(args.epub)[1]:
+        args.epub += ".epub"
+    if args.dictionary and not os.path.splitext(args.dictionary)[1]:
+        args.dictionary += ".dict"
+
+    # Auto-detect a .dict file that matches the epub name.
+    if args.epub and not args.dictionary:
+        candidate = os.path.splitext(args.epub)[0] + ".dict"
+        if os.path.isfile(candidate):
+            args.dictionary = candidate
+            print(f"[INFO] Auto-loading dictionary '{candidate}'.")
+
+
     if args.test:
         lang = args.test.lower()
         if lang not in SUPPORTED_LANGUAGES:
@@ -683,7 +698,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             needs_mp3=audio_format == "mp3",
         )
         synthesize_text_to_file(
-            lexicon.apply(text_to_speak),
+            prepare_text(text_to_speak, args.lang, lexicon),
             path,
             lang_code=args.lang,
             voice=args.voice,
@@ -717,7 +732,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     lexicon = load_lexicon(args)
     device = prepare_synthesis(args, needs_player=True, lang_code=args.lang)
     synthesize_and_play(
-        lexicon.apply(text_to_speak),
+        prepare_text(text_to_speak, args.lang, lexicon),
         lang_code=args.lang,
         voice=args.voice,
         display=args.display,

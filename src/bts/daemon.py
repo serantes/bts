@@ -42,6 +42,7 @@ import threading
 from pathlib import Path
 
 from bts.constants import DEFAULT_MP3_QUALITY
+from bts.numbers import prepare_text
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -378,7 +379,7 @@ class BTSDaemon:
         with self._capture_stdout(conn):
             try:
                 synthesize_and_play(
-                    lexicon.apply(text),
+                    prepare_text(text, lang, lexicon),
                     lang_code=lang,
                     voice=voice,
                     display=False,  # Karaoke requires a foreground process
@@ -409,7 +410,7 @@ class BTSDaemon:
         with self._capture_stdout(conn):
             try:
                 synthesize_text_to_file(
-                    lexicon.apply(text),
+                    prepare_text(text, lang, lexicon),
                     output,
                     lang_code=lang,
                     voice=voice,

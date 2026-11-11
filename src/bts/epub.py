@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from bts.constants import DEFAULT_MP3_QUALITY, MIN_SECTION_CHARS
 from bts.dictionary import PronunciationDictionary
 from bts.errors import GpuMemoryError, PlayerNotFoundError, TTSError
+from bts.numbers import prepare_text
 from bts.synthesis import synthesize_and_play, synthesize_epub_section_to_file
 
 # Optional imports for EPUB processing.
@@ -243,8 +244,11 @@ def stream_sections(
     for sec in sections:
         print(f"[{sec.index}/{total}] Reading section: {sec.title}")
         try:
-            title = lexicon.apply(sec.title) if sec.has_heading else ""
-            body = lexicon.apply(get_section_body(sec))
+            title = (
+                prepare_text(sec.title, lang_code, lexicon)
+                if sec.has_heading else ""
+            )
+            body = prepare_text(get_section_body(sec), lang_code, lexicon)
             if title or body:
                 synthesize_and_play(
                     body,
@@ -325,8 +329,9 @@ def export_sections(
         print(f"[{sec.index}/{total}] Synthesizing section: {filename}")
         try:
             synthesize_epub_section_to_file(
-                lexicon.apply(sec.title) if sec.has_heading else "",
-                lexicon.apply(body),
+                prepare_text(sec.title, lang_code, lexicon)
+                if sec.has_heading else "",
+                prepare_text(body, lang_code, lexicon),
                 output_filepath,
                 lang_code=lang_code,
                 voice=voice,

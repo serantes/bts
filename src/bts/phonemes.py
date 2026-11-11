@@ -70,6 +70,26 @@ def join_phonemes(parts: list) -> str:
     return joined
 
 
+def _split_phonemes(phonemes: str) -> list[str]:
+    """Split a phoneme string into sub-strings each within MAX_PHONEMES.
+
+    Splits at the last space that keeps each piece within MAX_PHONEMES.
+    Returns the original list with one element when no splitting is needed.
+    """
+    if len(phonemes) <= MAX_PHONEMES:
+        return [phonemes]
+    parts = []
+    while len(phonemes) > MAX_PHONEMES:
+        cut = phonemes.rfind(" ", 0, MAX_PHONEMES + 1)
+        if cut == -1:  # single very long token: hard-cut
+            cut = MAX_PHONEMES
+        parts.append(phonemes[:cut])
+        phonemes = phonemes[cut:].lstrip()
+    if phonemes:
+        parts.append(phonemes)
+    return parts
+
+
 def chunk_phonemes(pipeline: KPipeline, chunk: str) -> str | None:
     """Build the phonemes of a chunk that contains phoneme markup.
 
@@ -78,7 +98,7 @@ def chunk_phonemes(pipeline: KPipeline, chunk: str) -> str | None:
         chunk: Text with ``[word](/phonemes/)`` markup.
 
     Returns:
-        The phoneme string, or None if it cannot be built or is too long.
+        The phoneme string, or None if it cannot be built.
     """
     try:
         parts = []
@@ -96,11 +116,4 @@ def chunk_phonemes(pipeline: KPipeline, chunk: str) -> str | None:
         )
         return None
 
-    phonemes = join_phonemes(parts)
-    if len(phonemes) > MAX_PHONEMES:
-        warn_once(
-            "a text chunk with IPA entries is too long; its IPA entries "
-            "are read as plain words."
-        )
-        return None
-    return phonemes
+    return join_phonemes(parts)
