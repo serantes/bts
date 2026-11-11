@@ -1,0 +1,318 @@
+"""Command line parsing and dispatch."""
+
+import io
+import sys
+
+import pytest
+
+from bts import cli
+
+
+def parse(*argv):
+    return cli.build_parser().parse_args(list(argv))
+
+
+def test_parser_defaults():
+    args = parse()
+    assert args.lang == "es" and args.speed == 1.0 and args.device == "cpu"
+    assert args.output is None and args.format is None
+    assert args.mp3_quality == cli.DEFAULT_MP3_QUALITY
+
+
+def test_parser_output_without_value():
+    assert parse("--output").output == ""
+    assert parse("--output", "dir").output == "dir"
+
+
+def test_parser_lang_case_insensitive_and_validated():
+    assert parse("--lang", "US").lang == "us"
+    with pytest.raises(SystemExit):
+        parse("--lang", "xx")
+
+
+def test_parser_epub_and_txt_are_exclusive():
+    with pytest.raises(SystemExit):
+        parse("--epub", "a.epub", "--txt", "a.txt")
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "abc"])
+def test_positive_float_rejects(value):
+    with pytest.raises(SystemExit):
+        parse("--speed", value)
+
+
+def test_mp3_quality_range():
+    assert parse("--mp3-quality", "9").mp3_quality == 9
+    with pytest.raises(SystemExit):
+        parse("--mp3-quality", "10")
+
+
+def test_version_flag(capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        parse("--version")
+    assert exit_info.value.code == 0
+    assert "BTS - Book To Speech" in capsys.readouterr().out
+
+
+# --- --ipa parser tests -------------------------------------------------------
+
+
+def test_parser_ipa_absent_gives_none():
+    """Without --ipa the attribute is None."""
+    assert parse().ipa is None
+
+
+def test_parser_ipa_bare_gives_empty_string():
+    """--ipa without LANG sets ipa to '' (const)."""
+    assert parse("--ipa").ipa == ""
+
+
+def test_parser_ipa_with_lang_stores_lowercased_code():
+    """--ipa LANG stores the lowercase language code."""
+    assert parse("--ipa", "US").ipa == "us"
+    assert parse("--ipa", "en").ipa == "en"
+
+
+def test_parser_ipa_unsupported_lang_errors(spy):
+    """--ipa with an unknown language code exits with code 2."""
+    with pytest.raises(SystemExit) as exc:
+        run("--analyze", "--txt", "a.txt", "--ipa", "xx")
+    assert exc.value.code == 2
+
+
+def test_run_analyze_with_ipa_lang_dispatches(monkeypatch):
+    """--analyze --ipa LANG reaches run_analysis with ipa set to the code."""
+    captured = {}
+
+    def fake_analysis(args):
+        captured["ipa"] = args.ipa
+        captured["lang"] = args.lang
+        return 0
+
+    monkeypatch.setattr(cli, "run_analysis", fake_analysis)
+    run("--analyze", "--txt", "a.txt", "--lang", "es", "--ipa", "us")
+    assert captured == {"ipa": "us", "lang": "es"}
+
+
+# --- run -------------------------------------------------------------------
+
+
+@pytest.fixture
+def spy(monkeypatch):
+    """Replace every heavy action with a recorder."""
+    calls = {}
+    monkeypatch.setattr(cli, "prepare_synthesis", lambda args, **kw: "cpu")
+    monkeypatch.setattr(
+        cli, "synthesize_and_play", lambda text, **kw: calls.update(
+            play=(text, kw)
+        )
+    )
+    monkeypatch.setattr(
+        cli, "synthesize_text_to_file",
+        lambda text, path, **kw: calls.update(file=(text, path, kw)),
+    )
+    monkeypatch.setattr(
+        cli, "process_epub_book", lambda **kw: calls.update(epub=kw) or 0
+    )
+    return calls
+
+
+def run(*argv):
+    parser = cli.build_parser()
+    return cli.run(parser.parse_args(list(argv)), parser)
+
+
+def test_run_plain_text_plays(spy):
+    assert run("hola", "--speed", "1.2", "--lang", "us") == 0
+    text, kw = spy["play"]
+    assert text == "hola" and kw["speed"] == 1.2 and kw["lang_code"] == "us"
+
+
+def test_run_text_applies_dictionary(spy, tmp_path):
+    dictionary = tmp_path / "d.txt"
+    dictionary.write_text("hola|adios\n", encoding="utf-8")
+    run("hola mundo", "--dictionary", str(dictionary))
+    assert spy["play"][0] == "adios mundo"
+
+
+def test_run_txt_to_file_defaults_to_txt_name(spy, tmp_path):
+    source = tmp_path / "story.txt"
+    source.write_text("hello", encoding="utf-8")
+    run("--txt", str(source), "--output")
+    text, path, kw = spy["file"]
+    assert text == "hello" and path == "story.flac"
+    assert kw["audio_format"] == "flac"
+
+
+def test_run_output_name_and_mp3(spy):
+    run("hola", "--output", "x.mp3", "--mp3-quality", "2")
+    _, path, kw = spy["file"]
+    assert path == "x.mp3" and kw["audio_format"] == "mp3"
+    assert kw["mp3_quality"] == 2
+
+
+def test_run_output_without_name_for_plain_text(spy):
+    with pytest.raises(cli.TTSError, match="needs a file name"):
+        run("hola", "--output")
+
+
+def test_run_reads_stdin_dash(spy, monkeypatch):
+    monkeypatch.setattr(sys, "stdin", io.StringIO("  from pipe \n"))
+    run("-")
+    assert spy["play"][0] == "from pipe"
+
+
+def test_run_empty_stdin_is_error(spy, monkeypatch):
+    monkeypatch.setattr(sys, "stdin", io.StringIO("   "))
+    with pytest.raises(cli.TTSError, match="empty input"):
+        run("-")
+
+
+def test_run_no_input_prints_help(spy, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_stdin_has_data", lambda timeout=2.0: False)
+    assert run() == 1
+    assert "usage:" in capsys.readouterr().out
+
+
+def test_stdin_has_data_false_for_tty(monkeypatch):
+    class Tty:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(sys, "stdin", Tty())
+    assert cli._stdin_has_data() is False
+
+
+def test_stdin_has_data_with_real_pipe(monkeypatch):
+    import os
+
+    read_fd, write_fd = os.pipe()
+    try:
+        monkeypatch.setattr(sys, "stdin", os.fdopen(read_fd))
+        assert cli._stdin_has_data(0.05) is False  # silent open pipe
+        os.write(write_fd, b"x")
+        assert cli._stdin_has_data(0.05) is True
+    finally:
+        os.close(write_fd)
+
+
+def test_run_epub_passes_options(spy):
+    run(
+        "--epub", "b.epub", "--section-start", "3", "--format", "mp3",
+        "--output", "out", "--speed", "0.9",
+    )
+    kw = spy["epub"]
+    assert kw["epub_path"] == "b.epub" and kw["section_start"] == "3"
+    assert kw["audio_format"] == "mp3" and kw["output_arg"] == "out"
+    assert kw["speed"] == 0.9
+
+
+def test_run_epub_failures_give_status_1(monkeypatch, spy):
+    monkeypatch.setattr(cli, "process_epub_book", lambda **kw: 2)
+    assert run("--epub", "b.epub") == 1
+
+
+def test_run_section_list_skips_device_preparation(monkeypatch, spy):
+    def boom(*a, **k):
+        raise AssertionError("not needed")
+
+    monkeypatch.setattr(cli, "prepare_synthesis", boom)
+    assert run("--epub", "b.epub", "--section-list") == 0
+    assert spy["epub"]["section_list"] is True
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("--section-list",),
+        ("--section-start", "2"),
+        ("--ipa",),
+        ("--analyze",),
+        ("hola", "--epub", "b.epub"),
+    ],
+)
+def test_run_usage_errors(spy, argv):
+    with pytest.raises(SystemExit) as exit_info:
+        run(*argv)
+    assert exit_info.value.code == 2
+
+
+def test_run_listings(capsys):
+    assert run("--list-languages") == 0
+    assert run("--list-voices") == 0
+    assert run("--list-voices", "es") == 0
+    assert "ef_dora" in capsys.readouterr().out
+
+
+def test_run_test_voices(monkeypatch, spy):
+    monkeypatch.setattr(cli, "run_voice_tests", lambda lang, device: 1)
+    assert run("--test", "es") == 1
+    monkeypatch.setattr(cli, "run_voice_tests", lambda lang, device: 0)
+    assert run("--test", "ES") == 0
+    with pytest.raises(cli.TTSError):
+        run("--test", "xx")
+
+
+def test_run_analyze_dispatch(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "run_analysis", lambda args: 0)
+    assert run("--analyze", "--txt", "a.txt", "--output", "x") == 0
+    assert "--output is ignored" in capsys.readouterr().err
+
+
+# --- prepare_synthesis ---------------------------------------------------------
+
+
+def test_prepare_synthesis_checks_requirements(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "require_ffplay", lambda: calls.append("ffplay"))
+    monkeypatch.setattr(cli, "require_mp3_encoder", lambda: calls.append("mp3"))
+    monkeypatch.setattr(cli, "resolve_device", lambda requested: requested)
+    args = parse("--device", "auto")
+    assert cli.prepare_synthesis(args, True, "es", needs_mp3=True) == "auto"
+    assert calls == ["ffplay", "mp3"]
+    calls.clear()
+    cli.prepare_synthesis(args, False, "es")
+    assert calls == []
+
+
+def test_prepare_synthesis_validates_voice(monkeypatch):
+    monkeypatch.setattr(cli, "resolve_device", lambda requested: "cpu")
+    with pytest.raises(cli.TTSError, match="Unknown voice"):
+        cli.prepare_synthesis(parse("--voice", "zzz"), False, "es")
+
+
+def test_load_lexicon(tmp_path, capsys):
+    assert len(cli.load_lexicon(parse())) == 0
+    path = tmp_path / "d.txt"
+    path.write_text("a|b\n", encoding="utf-8")
+    lexicon = cli.load_lexicon(parse("--dictionary", str(path)))
+    assert len(lexicon) == 1
+    assert "Loaded 1 pronunciation entries" in capsys.readouterr().out
+
+
+# --- main --------------------------------------------------------------------
+
+
+def test_main_status_codes(monkeypatch, capsys):
+    def raiser(error):
+        def fail(args, parser):
+            raise error
+
+        return fail
+
+    monkeypatch.setattr(cli, "run", raiser(cli.TTSError("bad")))
+    assert cli.main(["x"]) == 1
+    assert "Error: bad" in capsys.readouterr().err
+
+    monkeypatch.setattr(cli, "run", raiser(cli.GpuMemoryError("full")))
+    assert cli.main(["x"]) == cli.EXIT_GPU_BUSY == 0
+    assert "Warning: full" in capsys.readouterr().err
+
+    monkeypatch.setattr(cli, "run", raiser(KeyboardInterrupt()))
+    assert cli.main(["x"]) == 0
+    assert "Ctrl+C" in capsys.readouterr().out
+
+
+def test_main_end_to_end_listing(capsys):
+    assert cli.main(["--list-languages"]) == 0
+    assert "Spanish" in capsys.readouterr().out

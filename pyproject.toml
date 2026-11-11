@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bts"
+version = "0.1.0"
+description = "BTS - Book To Speech: local neural text-to-speech (Kokoro-82M) for text, text files and EPUB books"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+keywords = ["tts", "kokoro", "epub", "audiobook", "speech"]
+classifiers = [
+    "Environment :: Console",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "kokoro>=0.9.4",
+    "soundfile",
+    "numpy",
+    "torch",
+    "ebooklib",
+    "beautifulsoup4",
+]
+
+[project.optional-dependencies]
+# Japanese also needs: python -m unidic download
+ja = ["misaki[ja]"]
+zh = ["misaki[zh]"]
+all = ["misaki[ja]", "misaki[zh]"]
+dev = ["pytest>=8", "ruff"]
+
+[project.scripts]
+bts = "bts.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 79
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Export an EPUB book to Spanish FLAC audio files using bts.py.
+#
+# Usage: epub_esf BOOK.epub [extra bts options]
+#
+# The audio files are written to a folder named after the book, inside the
+# current directory. Any extra options (for example "--section-start 5")
+# are passed on to bts.py.
+
+# Resolve the directory of this script, following symlinks.
+# From https://stackoverflow.com/questions/59895/
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    # A relative symlink is relative to the directory that contains it.
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+APPPATH="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
+BTS_CMD="$APPPATH/../.venv/bin/bts"
+
+if [ ! -x "$BTS_CMD" ]; then
+    echo "Error: \"$BTS_CMD\" not found (run scripts/bts_init.sh)." >&2
+    exit 1
+fi
+
+exec "$BTS_CMD" "$@"
