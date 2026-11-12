@@ -5,7 +5,7 @@ Generates speech locally with the Kokoro-82M model and either streams it to
 
 Features:
     * Text from the command line, from standard input or from a text file
-      (``--txt``), read aloud or saved as an audio file (``--output``).
+      (``--text``), read aloud or saved as an audio file (``--output``).
     * Optional karaoke-style word highlighting synchronized with the audio.
     * EPUB books: read them aloud (streaming) or export one audio file per
       section, as FLAC or as variable-bitrate MP3 (``--format``). An
@@ -35,7 +35,7 @@ Examples:
     bts --epub book.epub --output out_dir
     bts --epub book.epub --output --format mp3
     bts --epub book.epub --dictionary words.txt
-    bts --txt story.txt --output story.mp3
+    bts --text story.txt --output story.mp3
     bts "Hola" --output hola.flac
     bts --epub book.epub --analyze
     bts --epub book.epub --analyze --ipa
@@ -80,6 +80,7 @@ from bts.languages import (
     validate_voice,
 )
 from bts.numbers import prepare_text
+from bts.project import build_project, create_project
 from bts.synthesis import (
     run_voice_tests,
     synthesize_and_play,
@@ -114,6 +115,14 @@ def non_negative_float(value: str) -> float:
             "the value must be finite and at least 0"
         )
     return number
+
+
+class _StoreExplicit(argparse.Action):
+    """Store an option value and mark that the user supplied it."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        setattr(namespace, f"{self.dest}_explicit", True)
 
 
 def _package_version() -> str:
@@ -156,6 +165,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.set_defaults(
+        lang_explicit=False,
+        voice_explicit=False,
+        format_explicit=False,
+        dictionary_explicit=False,
+    )
     parser.add_argument(
         "--version",
         action="version",
@@ -171,6 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--lang",
+        action=_StoreExplicit,
         default="es",
         type=str.lower,
         choices=sorted(SUPPORTED_LANGUAGES),
@@ -178,6 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     voice_action = parser.add_argument(
         "--voice",
+        action=_StoreExplicit,
         default=None,
         help=(
             "Neural voice ID to use. If omitted, uses the first verified "
@@ -225,12 +242,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to an EPUB book.",
     )
     source.add_argument(
-        "--txt",
+        "--text",
+        dest="text_file",
         metavar="FILE.txt",
         help=(
             "Path to a UTF-8 text file, used like --epub but with a plain "
             "text: read aloud, saved with --output, or analyzed with "
             "--analyze."
+        ),
+    )
+    parser.add_argument(
+        "--project",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Create a .bts project for the EPUB or text source. If NAME is "
+            "omitted, the project uses the source name."
+        ),
+    )
+    parser.add_argument(
+        "--build",
+        metavar="PROJECT",
+        help=(
+            "Build audio files from a .bts project file; the extension is "
+            "optional."
         ),
     )
     source.add_argument(
@@ -251,13 +288,14 @@ def build_parser() -> argparse.ArgumentParser:
             "Save audio instead of playing it. With --epub it is the "
             "directory that receives one file per section; without a value "
             "it is named after the book. For any other text it is the name "
-            "of the audio file, which is required, except with --txt, "
+            "of the audio file, which is required, except with --text, "
             "where it defaults to the name of the text file. Existing "
             "audio files of a plain text are replaced."
         ),
     )
     parser.add_argument(
         "--format",
+        action=_StoreExplicit,
         choices=AUDIO_FORMATS,
         default=None,
         help=(
@@ -280,6 +318,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--dictionary",
+        action=_StoreExplicit,
         metavar="FILE",
         help=(
             "Pronunciation dictionary: a UTF-8 text file with one "
@@ -302,7 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="analyze",
         action="store_true",
         help=(
-            "With --epub or --txt, write a file with the words that the "
+            "With --epub or --text, write a file with the words that the "
             "Hunspell dictionary of --lang does not know, one 'word|word' "
             "per line, to use as a pronunciation dictionary. It is named "
             "after the source with the extension .dict (in the current "
@@ -690,15 +729,15 @@ def read_clipboard() -> str:
     """
     import subprocess
 
-    tools = [
-        ["wl-paste", "-p"],
-        ["xclip", "-selection", "primary", "-o"],
-        ["xclip", "-selection", "clipboard", "-o"],
-        ["xsel", "--primary", "--output"],
-        ["xsel", "--clipboard", "--output"],
-        ["xdotool", "getactivewindow", "selectall", "--clearmodifiers",
-         "type", "--clearmodifiers"],  # intentionally last / unlikely
-    ]
+    # tools = [
+    #     ["wl-paste", "-p"],
+    #     ["xclip", "-selection", "primary", "-o"],
+    #     ["xclip", "-selection", "clipboard", "-o"],
+    #     ["xsel", "--primary", "--output"],
+    #     ["xsel", "--clipboard", "--output"],
+    #     ["xdotool", "getactivewindow", "selectall", "--clearmodifiers",
+    #      "type", "--clearmodifiers"],  # intentionally last / unlikely
+    # ]
     # Simpler ordered list: primary first, clipboard fallback, two tools.
     ordered = [
         (["wl-paste", "-p"], "wl-paste"),
@@ -755,6 +794,48 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     Returns:
         The process exit status.
     """
+    if args.build is not None:
+        if (
+            args.project is not None
+            or args.epub
+            or args.text_file
+            or args.clipboard
+            or args.text is not None
+            or args.analyze
+            or args.ipa is not None
+            or args.sections_list
+            or args.section_start is not None
+            or args.test is not None
+            or args.list_languages
+            or args.list_voices is not None
+        ):
+            parser.error(
+                "--build cannot be combined with source, project, "
+                "analysis, section, test, or listing options."
+            )
+        return build_project(
+            args.build,
+            output_dir=args.output,
+            language_override=(
+                args.lang if args.lang_explicit else None
+            ),
+            voice_override=(
+                args.voice if args.voice_explicit else None
+            ),
+            format_override=(
+                args.format if args.format_explicit else None
+            ),
+            dictionary_override=(
+                args.dictionary
+                if args.dictionary_explicit else None
+            ),
+            dictionary_ignore_case=args.dictionary_ignore_case,
+            speed=args.speed,
+            device=args.device,
+            mp3_quality=args.mp3_quality,
+            max_pause_seconds=args.max_pause,
+        )
+
     if args.list_languages:
         show_languages()
         return 0
@@ -768,6 +849,33 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         args.epub += ".epub"
     if args.dictionary and not os.path.splitext(args.dictionary)[1]:
         args.dictionary += ".dict"
+
+    if args.project is not None:
+        if not (args.epub or args.text_file):
+            parser.error("--project requires --epub or --text.")
+        if (
+            args.analyze
+            or args.ipa is not None
+            or args.sections_list
+            or args.section_start is not None
+            or args.output is not None
+            or args.dictionary is not None
+            or args.format is not None
+            or args.voice is not None
+            or args.text is not None
+        ):
+            parser.error(
+                "--project cannot be combined with analysis, section, "
+                "output, dictionary, format, or voice options."
+            )
+        source_file = args.epub or args.text_file
+        project_path = create_project(
+            source_file,
+            args.project or None,
+            source_type="epub" if args.epub else "text",
+        )
+        print(f"[INFO] Created project '{project_path}'.")
+        return 0
 
     # Auto-detect a .dict file that matches the epub name.
     if args.epub and not args.dictionary:
@@ -801,8 +909,8 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             )
 
     if args.analyze:
-        if not (args.epub or args.txt):
-            parser.error("--analyze requires --epub or --txt.")
+        if not (args.epub or args.text_file):
+            parser.error("--analyze requires --epub or --text.")
         if args.output is not None:
             print(
                 "[INFO] --output is ignored with --analyze.",
@@ -810,9 +918,9 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             )
         return run_analysis(args)
 
-    if args.text and (args.epub or args.txt):
+    if args.text and (args.epub or args.text_file):
         parser.error(
-            "a text argument cannot be combined with --epub or --txt."
+            "a text argument cannot be combined with --epub or --text."
         )
 
     if args.epub:
@@ -873,9 +981,9 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     default_name = None
     if args.clipboard:
         text_to_speak = read_clipboard()
-    elif args.txt:
-        text_to_speak = read_text_file(args.txt)
-        default_name = os.path.splitext(os.path.basename(args.txt))[0]
+    elif args.text_file:
+        text_to_speak = read_text_file(args.text_file)
+        default_name = os.path.splitext(os.path.basename(args.text_file))[0]
     elif args.text and args.text != "-":
         text_to_speak = args.text
     elif args.text == "-" or _stdin_has_data():

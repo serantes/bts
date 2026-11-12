@@ -39,7 +39,7 @@ pip install -e ".[all,dev]"
 bts "Hola, esto es una prueba."
 bts --epub libro.epub                        # stream aloud
 bts --epub libro.epub --output --format mp3  # export, one file per section
-bts --txt story.txt --output story.flac
+bts --text story.txt --output story.flac
 echo "Hello" | bts --lang us                 # pipe from stdin
 bts --lang us -                              # read stdin explicitly
 bts --epub libro.epub --analyze --ipa        # build a pronunciation dictionary

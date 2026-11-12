@@ -341,7 +341,7 @@ def write_word_list(path: str, entries: list) -> None:
 def run_analysis(args: argparse.Namespace) -> int:
     """Create a pronunciation dictionary with the unknown words of a text.
 
-    The text comes from ``--epub`` or ``--txt``. The result is named after
+    The text comes from ``--epub`` or ``--text``. The result is named after
     the source (``book.epub`` gives ``book.dict``) unless ``--dictionary``
     gives another name. Each line is ``word|word``, or with ``--ipa``
     ``word|[word](/phonemes/)``, so that it can be edited and used later as
@@ -364,7 +364,7 @@ def run_analysis(args: argparse.Namespace) -> int:
             anything else), the language has no dictionary, or the source
             cannot be read.
     """
-    source = args.epub or args.txt
+    source = args.epub or args.text_file
     target = args.dictionary or default_dict_path(source)
     if os.path.exists(target):
         raise TTSError(
@@ -378,7 +378,7 @@ def run_analysis(args: argparse.Namespace) -> int:
             sections = load_sections(args.epub)
             text = "\n".join(get_plain_text(sec.soup) for sec in sections)
         else:
-            text = read_text_file(args.txt)
+            text = read_text_file(args.text_file)
         print(f"[ANALYSIS] Checking '{source}' (language '{args.lang}')...")
         words = analyze_text(text, analyzer)
     finally:

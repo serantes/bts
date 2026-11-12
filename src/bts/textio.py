@@ -84,7 +84,7 @@ def resolve_audio_output(
             given without a name.
         format_arg: Value of ``--format``, or None if it was not given.
         default_name: Name, without extension, to use when ``--output`` has
-            no name (the one of the ``--txt`` file), or None if there is no
+            no name (the one of the ``--text`` file), or None if there is no
             such name.
 
     Returns:
@@ -98,7 +98,7 @@ def resolve_audio_output(
     if not name:
         raise TTSError(
             "--output needs a file name when the text does not come from "
-            "--txt, for example: --output reading.mp3"
+            "--text, for example: --output reading.mp3"
         )
     extension = os.path.splitext(name)[1].lower().lstrip(".")
     if extension in AUDIO_FORMATS:

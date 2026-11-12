@@ -170,18 +170,20 @@ def test_write_word_list_unwritable(tmp_path):
 def analysis_args(**kw):
     # Mirrors argparse defaults: ipa=None when flag absent, "" when bare,
     # "<code>" when --ipa LANG is supplied.
-    values = dict(epub=None, txt=None, dictionary=None, lang="es", ipa=None)
+    values = dict(
+        epub=None, text_file=None, dictionary=None, lang="es", ipa=None
+    )
     values.update(kw)
     return argparse.Namespace(**values)
 
 
-def test_run_analysis_txt(monkeypatch, tmp_path, capsys):
+def test_run_analysis_text(monkeypatch, tmp_path, capsys):
     analyzer = FakeAnalyzer()
     monkeypatch.setattr(analysis, "get_analyzer", lambda lang: analyzer)
     source = tmp_path / "s.txt"
     source.write_text("hola Zorg mundo", encoding="utf-8")
     target = tmp_path / "out.dict"
-    args = analysis_args(txt=str(source), dictionary=str(target))
+    args = analysis_args(text_file=str(source), dictionary=str(target))
     assert analysis.run_analysis(args) == 0
     assert target.read_text(encoding="utf-8") == "Zorg|Zorg\n"
     assert analyzer.closed
@@ -194,7 +196,7 @@ def test_run_analysis_refuses_existing_target_before_work(monkeypatch, tmp_path)
     monkeypatch.setattr(analysis, "get_analyzer", boom)
     target = tmp_path / "out.dict"
     target.write_text("keep")
-    args = analysis_args(txt="x.txt", dictionary=str(target))
+    args = analysis_args(text_file="x.txt", dictionary=str(target))
     with pytest.raises(errors.TTSError, match="already exists"):
         analysis.run_analysis(args)
     assert target.read_text() == "keep"
@@ -204,7 +206,8 @@ def test_run_analysis_closes_analyzer_on_error(monkeypatch, tmp_path):
     analyzer = FakeAnalyzer()
     monkeypatch.setattr(analysis, "get_analyzer", lambda lang: analyzer)
     args = analysis_args(
-        txt=str(tmp_path / "missing.txt"), dictionary=str(tmp_path / "o.dict")
+        text_file=str(tmp_path / "missing.txt"),
+        dictionary=str(tmp_path / "o.dict"),
     )
     with pytest.raises(errors.TTSError):
         analysis.run_analysis(args)
@@ -225,7 +228,9 @@ def test_run_analysis_with_ipa_no_lang(monkeypatch, tmp_path, fake_pipeline):
     source.write_text("Zorg", encoding="utf-8")
     target = tmp_path / "o.dict"
     # ipa="" means bare --ipa with no LANG argument.
-    args = analysis_args(txt=str(source), dictionary=str(target), lang="es", ipa="")
+    args = analysis_args(
+        text_file=str(source), dictionary=str(target), lang="es", ipa=""
+    )
     analysis.run_analysis(args)
     assert target.read_text(encoding="utf-8") == "Zorg|[Zorg](/ZORG/)\n"
     # The pipeline must have been created with the internal code for 'es'.
@@ -248,7 +253,7 @@ def test_run_analysis_with_ipa_lang_override(monkeypatch, tmp_path, fake_pipelin
     target = tmp_path / "o.dict"
     # Analyze Spanish text but generate English IPA for unknown proper nouns.
     args = analysis_args(
-        txt=str(source), dictionary=str(target), lang="es", ipa="us"
+        text_file=str(source), dictionary=str(target), lang="es", ipa="us"
     )
     analysis.run_analysis(args)
     # The IPA pipeline must have been requested for 'us', not 'es'.
@@ -273,7 +278,7 @@ def test_run_analysis_ipa_message_shows_lang_only_when_different(
     # Case 1: bare --ipa (ipa="") — no language hint in the message.
     target1 = tmp_path / "o1.dict"
     args1 = analysis_args(
-        txt=str(source), dictionary=str(target1), lang="es", ipa=""
+        text_file=str(source), dictionary=str(target1), lang="es", ipa=""
     )
     analysis.run_analysis(args1)
     out1 = capsys.readouterr().out
@@ -282,7 +287,7 @@ def test_run_analysis_ipa_message_shows_lang_only_when_different(
     # Case 2: --ipa LANG with a different code — hint appears.
     target2 = tmp_path / "o2.dict"
     args2 = analysis_args(
-        txt=str(source), dictionary=str(target2), lang="es", ipa="us"
+        text_file=str(source), dictionary=str(target2), lang="es", ipa="us"
     )
     analysis.run_analysis(args2)
     out2 = capsys.readouterr().out
@@ -298,6 +303,8 @@ def test_run_analysis_no_ipa_flag_skips_phonemes(
     source.write_text("Zorg", encoding="utf-8")
     target = tmp_path / "o.dict"
     # ipa=None is what argparse sets when --ipa is not given at all.
-    args = analysis_args(txt=str(source), dictionary=str(target), ipa=None)
+    args = analysis_args(
+        text_file=str(source), dictionary=str(target), ipa=None
+    )
     analysis.run_analysis(args)
     assert target.read_text(encoding="utf-8") == "Zorg|Zorg\n"

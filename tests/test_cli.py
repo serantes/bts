@@ -51,9 +51,36 @@ def test_parser_lang_case_insensitive_and_validated():
         parse("--lang", "xx")
 
 
-def test_parser_epub_and_txt_are_exclusive():
+def test_parser_epub_and_text_are_exclusive():
     with pytest.raises(SystemExit):
-        parse("--epub", "a.epub", "--txt", "a.txt")
+        parse("--epub", "a.epub", "--text", "a.txt")
+
+
+def test_parser_rejects_legacy_txt_option():
+    with pytest.raises(SystemExit):
+        parse("--txt", "a.txt")
+
+
+def test_parser_project_accepts_optional_name():
+    assert parse("--epub", "book.epub", "--project").project == ""
+    assert parse("--text", "book.txt", "--project", "book").project == "book"
+
+
+def test_parser_tracks_explicit_build_overrides():
+    defaults = parse()
+    assert not defaults.lang_explicit
+    assert not defaults.voice_explicit
+    assert not defaults.format_explicit
+    assert not defaults.dictionary_explicit
+
+    args = parse(
+        "--build", "book", "--lang", "fr", "--voice", "ff_siwis",
+        "--format", "mp3", "--dictionary", "words",
+    )
+    assert args.lang_explicit
+    assert args.voice_explicit
+    assert args.format_explicit
+    assert args.dictionary_explicit
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "abc"])
@@ -97,7 +124,7 @@ def test_parser_ipa_with_lang_stores_lowercased_code():
 def test_parser_ipa_unsupported_lang_errors(spy):
     """--ipa with an unknown language code exits with code 2."""
     with pytest.raises(SystemExit) as exc:
-        run("--analyze", "--txt", "a.txt", "--ipa", "xx")
+        run("--analyze", "--text", "a.txt", "--ipa", "xx")
     assert exc.value.code == 2
 
 
@@ -111,7 +138,7 @@ def test_run_analyze_with_ipa_lang_dispatches(monkeypatch):
         return 0
 
     monkeypatch.setattr(cli, "run_analysis", fake_analysis)
-    run("--analyze", "--txt", "a.txt", "--lang", "es", "--ipa", "us")
+    run("--analyze", "--text", "a.txt", "--lang", "es", "--ipa", "us")
     assert captured == {"ipa": "us", "lang": "es"}
 
 
@@ -172,7 +199,7 @@ def test_run_text_applies_dictionary(spy, tmp_path):
 def test_run_txt_to_file_defaults_to_txt_name(spy, tmp_path):
     source = tmp_path / "story.txt"
     source.write_text("hello", encoding="utf-8")
-    run("--txt", str(source), "--output")
+    run("--text", str(source), "--output")
     text, path, kw = spy["file"]
     assert text == "hello" and path == "story.flac"
     assert kw["audio_format"] == "flac"
@@ -270,6 +297,50 @@ def test_run_epub_failures_give_status_1(monkeypatch, spy):
     assert run("--epub", "b.epub") == 1
 
 
+def test_run_project_creates_project_without_synthesis(monkeypatch, spy):
+    calls = []
+    monkeypatch.setattr(
+        cli,
+        "create_project",
+        lambda source_file, project_name, source_type: (
+            calls.append((source_file, project_name, source_type))
+            or "book.bts"
+        ),
+    )
+
+    assert run("--epub", "book", "--project") == 0
+    assert calls == [("book.epub", None, "epub")]
+    assert "epub" not in spy
+
+
+def test_run_project_requires_file_source():
+    with pytest.raises(SystemExit) as exit_info:
+        run("--project")
+    assert exit_info.value.code == 2
+
+
+def test_run_build_passes_explicit_overrides(monkeypatch):
+    captured = {}
+
+    def fake_build(project_name, **kwargs):
+        captured["project_name"] = project_name
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli, "build_project", fake_build)
+    assert run(
+        "--build", "book", "--output", "audio", "--lang", "fr",
+        "--voice", "ff_siwis", "--format", "mp3",
+        "--dictionary", "words",
+    ) == 0
+    assert captured["project_name"] == "book"
+    assert captured["output_dir"] == "audio"
+    assert captured["language_override"] == "fr"
+    assert captured["voice_override"] == "ff_siwis"
+    assert captured["format_override"] == "mp3"
+    assert captured["dictionary_override"] == "words"
+
+
 def test_run_sections_list_skips_device_preparation(monkeypatch, spy):
     def boom(*a, **k):
         raise AssertionError("not needed")
@@ -313,7 +384,7 @@ def test_run_test_voices(monkeypatch, spy):
 
 def test_run_analyze_dispatch(monkeypatch, capsys):
     monkeypatch.setattr(cli, "run_analysis", lambda args: 0)
-    assert run("--analyze", "--txt", "a.txt", "--output", "x") == 0
+    assert run("--analyze", "--text", "a.txt", "--output", "x") == 0
     assert "--output is ignored" in capsys.readouterr().err
 
 

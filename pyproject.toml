@@ -17,6 +17,7 @@ classifiers = [
 dependencies = [
     "argcomplete>=3",
     "kokoro>=0.9.4",
+    "PyYAML>=6",
     "soundfile",
     "numpy",
     "torch",

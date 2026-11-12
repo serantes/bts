@@ -48,7 +48,6 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal, InvalidOperation
-from typing import Callable
 
 from bts.constants import IGNORED_STRINGS
 

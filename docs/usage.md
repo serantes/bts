@@ -91,13 +91,21 @@ puedes ejecutarlo sin activar el entorno: `.venv/bin/bts-tts`.
 bts "Hola, esto es una prueba."
 
 # Leer un fichero de texto
-bts --txt novela.txt
+bts --text novela.txt
 
 # Leer un EPUB en español con la voz por defecto
 bts --epub libro.epub
 
 # Exportar un EPUB a MP3 (un fichero por sección)
 bts --epub libro.epub --output --format mp3
+
+# Crear un proyecto editable a partir de un EPUB o un fichero de texto
+bts --epub libro.epub --project
+bts --text novela.txt --project lectura
+
+# Generar los audios definidos en un proyecto
+bts-tts --build lectura
+bts-tts --build lectura.bts --output audios
 
 # Ver ayuda completa
 bts --help
@@ -156,9 +164,27 @@ bts [opciones] [texto]
 | Opción | Descripción |
 |---|---|
 | `texto` | Texto a sintetizar, pasado directamente. |
-| `--epub FILE.epub` | Ruta a un libro EPUB. Incompatible con `--txt`. |
-| `--txt FILE.txt` | Ruta a un fichero de texto UTF-8. Incompatible con `--epub`. |
+| `--epub FILE.epub` | Ruta a un libro EPUB. Incompatible con `--text`. |
+| `--text FILE.txt` | Ruta a un fichero de texto UTF-8. Incompatible con `--epub`. |
+| `--project [NAME]` | Crea un proyecto YAML `.bts` para `--epub` o `--text`. Sin `NAME`, usa el nombre de la fuente; si se da un nombre sin extensión, añade `.bts`. |
+| `--build PROJECT` | Genera un archivo de audio por elemento de un proyecto `.bts`. La extensión es opcional. |
 | `-` | Leer desde la entrada estándar (stdin). Se puede usar también con una tubería. |
+
+El proyecto empieza con `Title`, `SourceFile`, `Dictionary`, `Voice`,
+`OutputFormat` y `FilenamePattern`. En `Elements` se crea un elemento `source`
+por sección EPUB (con su índice y título); para un fichero de texto se crea
+un único elemento `source` con `id: 1` y el nombre del fichero. No se
+sobrescribe un proyecto existente.
+
+`--build` genera los elementos en orden, usando `FilenamePattern`. Por defecto
+los deja en una carpeta con el nombre de la fuente; `--output DIR` permite
+elegir otra. Los elementos `source` que no correspondan a una sección se
+ignoran y los que tengan `action: skip` no se generan. Los campos requeridos
+vacíos producen un aviso y se omite ese elemento. Los valores `default` usan
+los valores predeterminados de BTS. Si existe el diccionario configurado se
+usa; si falta, se avisa y se continúa sin él. Si se indican `--lang`,
+`--voice`, `--format` o `--dictionary`, esos valores tienen precedencia sobre
+los del proyecto y se avisa cuando reemplazan un valor explícito del archivo.
 
 ### Voz y síntesis
 
@@ -236,8 +262,8 @@ cadenas a `IGNORED_STRINGS` en `src/bts/constants.py`.
 
 **Fichero de texto:**
 ```bash
-bts --txt articulo.txt
-bts --txt articulo.txt --lang us --speed 1.3
+bts --text articulo.txt
+bts --text articulo.txt --lang us --speed 1.3
 ```
 
 **Entrada estándar (stdin):**
@@ -308,11 +334,11 @@ Si un fichero ya existe al reanudar, se omite sin regenerarlo.
 **Exportar texto plano:**
 ```bash
 # La extensión determina el formato
-bts --txt articulo.txt --output articulo.flac
-bts --txt articulo.txt --output articulo.mp3
+bts --text articulo.txt --output articulo.flac
+bts --text articulo.txt --output articulo.mp3
 
 # Especificando formato explícitamente
-bts --txt articulo.txt --output articulo.flac --format flac
+bts --text articulo.txt --output articulo.flac --format flac
 ```
 
 ### 5.4 Análisis ortográfico y diccionario de pronunciación
@@ -354,7 +380,7 @@ bts --epub libro.epub --lang es --analyze --ipa us
 bts --epub libro.epub --analyze --ipa --dictionary nombres.dict
 
 # Analizar un fichero de texto
-bts --txt articulo.txt --lang us --analyze --ipa
+bts --text articulo.txt --lang us --analyze --ipa
 ```
 
 > **Requisitos:** `libhunspell` y el diccionario Hunspell del idioma de
@@ -585,9 +611,9 @@ bts --lang us --voice af_nova "This is a test of the nova voice."
 ### Exportar un artículo a FLAC
 
 ```bash
-bts --txt articulo.txt --output articulo.flac
+bts --text articulo.txt --output articulo.flac
 # o equivalente, con formato explícito:
-bts --txt articulo.txt --output articulo --format flac
+bts --text articulo.txt --output articulo --format flac
 ```
 
 ### Integración en un script
