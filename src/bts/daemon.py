@@ -9,7 +9,12 @@ Usage (via CLI)::
     bts daemon start              # start in background
     bts daemon start --fg         # start in foreground (shows logs)
     bts daemon start --timeout 60 # 60-minute inactivity timeout
-    bts daemon stop               # stop the running daemon
+    bts daemon pause               # pause the current conversion
+    bts daemon play                # resume a paused conversion
+    bts daemon resume              # resume a paused conversion
+    bts daemon stop                # stop the current conversion
+    bts daemon next                # skip the current task
+    bts daemon shutdown            # stop the daemon process
     bts daemon status             # show daemon status
 
 The daemon shuts itself down after a configurable inactivity period
@@ -21,7 +26,9 @@ One JSON object per line, UTF-8 encoded.
 
 Client → server (one request per connection)::
 
-    {"action": "play"|"save"|"epub"|"ping"|"status"|"stop", ...params}
+    {"action": "play"|"save"|"epub"|"ping"|"status"|"list"|"delete"|
+    "up"|"down"|"move"|"pause"|"resume"|"stop"|"next"|"shutdown",
+    ...params}
 
 Server → client (zero or more progress lines, then exactly one final line)::
 
@@ -39,10 +46,12 @@ import signal
 import socket
 import sys
 import threading
+from collections import deque
 from pathlib import Path
 
-from bts.constants import DEFAULT_MP3_QUALITY
+from bts.constants import DEFAULT_MAX_PAUSE_SECONDS, DEFAULT_MP3_QUALITY
 from bts.numbers import prepare_text
+from bts.synthesis import SynthesisCancelled
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -124,11 +133,10 @@ class _SocketWriter(io.TextIOBase):
 # ---------------------------------------------------------------------------
 
 class BTSDaemon:
-    """Single-threaded BTS daemon server.
+    """BTS daemon with a responsive control socket and serial work queue.
 
-    Connections are served one at a time, which avoids concurrency issues
-    with the Kokoro model.  For typical interactive single-user use the
-    daemon is never contended.
+    A single worker owns the Kokoro model. Connection handlers only enqueue
+    work or answer control requests, so status and control stay responsive.
     """
 
     def __init__(
@@ -138,6 +146,15 @@ class BTSDaemon:
         self._timer: threading.Timer | None = None
         self._running = False
         self._server_sock: socket.socket | None = None
+        self._work_queue: deque[tuple[dict, socket.socket]] = deque()
+        self._queue_condition = threading.Condition()
+        self._active_action: str | None = None
+        self._active_request: dict | None = None
+        self._paused = False
+        self._resume_event = threading.Event()
+        self._resume_event.set()
+        self._cancel_current = threading.Event()
+        self._worker: threading.Thread | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -154,7 +171,7 @@ class BTSDaemon:
         self._server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._server_sock.bind(str(SOCKET_PATH))
         SOCKET_PATH.chmod(0o700)
-        self._server_sock.listen(1)
+        self._server_sock.listen()
 
         PID_PATH.write_text(str(os.getpid()))
 
@@ -162,6 +179,10 @@ class BTSDaemon:
         signal.signal(signal.SIGINT, self._on_signal)
 
         self._running = True
+        self._worker = threading.Thread(
+            target=self._work_loop, name="bts-work-queue", daemon=True
+        )
+        self._worker.start()
         self._reset_timer()
 
         print(
@@ -184,11 +205,12 @@ class BTSDaemon:
                 except socket.timeout:
                     continue
                 self._reset_timer()
-                try:
-                    self._handle_connection(conn)
-                finally:
-                    with contextlib.suppress(OSError):
-                        conn.close()
+                threading.Thread(
+                    target=self._handle_connection,
+                    args=(conn,),
+                    name="bts-client",
+                    daemon=True,
+                ).start()
         except KeyboardInterrupt:
             pass
         finally:
@@ -198,11 +220,15 @@ class BTSDaemon:
         print(
             f"\n[BTS daemon] Signal {signum} — shutting down.", flush=True
         )
-        self._running = False
+        with self._queue_condition:
+            self._running = False
+            self._queue_condition.notify_all()
 
     def _timeout_shutdown(self) -> None:
         print("[BTS daemon] Inactivity timeout — shutting down.", flush=True)
-        self._running = False
+        with self._queue_condition:
+            self._running = False
+            self._queue_condition.notify_all()
 
     def _reset_timer(self) -> None:
         if self._timer is not None:
@@ -217,9 +243,22 @@ class BTSDaemon:
     def _cleanup(self) -> None:
         if self._timer is not None:
             self._timer.cancel()
+        self._resume_event.set()
+        self._cancel_current.set()
+        with self._queue_condition:
+            self._running = False
+            pending = list(self._work_queue)
+            self._work_queue.clear()
+            self._queue_condition.notify_all()
         if self._server_sock is not None:
             with contextlib.suppress(OSError):
                 self._server_sock.close()
+        if self._worker is not None:
+            self._worker.join(timeout=5)
+        for _, conn in pending:
+            self._send_exc(conn, RuntimeError("Daemon is shutting down."))
+            with contextlib.suppress(OSError):
+                conn.close()
         for path in (SOCKET_PATH, PID_PATH):
             with contextlib.suppress(FileNotFoundError):
                 path.unlink()
@@ -230,22 +269,22 @@ class BTSDaemon:
     # ------------------------------------------------------------------
 
     def _handle_connection(self, conn: socket.socket) -> None:
-        reader = conn.makefile("r", encoding="utf-8")
+        owns_connection = False
         try:
-            line = reader.readline()
-            if not line:
+            reader = conn.makefile("r", encoding="utf-8")
+            try:
+                line = reader.readline()
+                if not line:
+                    return
+                request = json.loads(line.strip())
+            except (json.JSONDecodeError, OSError, ValueError):
                 return
-            request = json.loads(line.strip())
-        except (json.JSONDecodeError, OSError, ValueError):
-            return
-        finally:
-            # Closing the read wrapper does NOT close conn because conn is
-            # still referenced by the caller.
-            with contextlib.suppress(OSError):
-                reader.close()
-
-        try:
-            self._dispatch(request, conn)
+            finally:
+                # Closing the read wrapper does NOT close conn because conn
+                # is still referenced by the caller or work queue.
+                with contextlib.suppress(OSError):
+                    reader.close()
+            owns_connection = self._dispatch(request, conn)
         except Exception as exc:  # noqa: BLE001
             with contextlib.suppress(OSError):
                 _send(
@@ -257,8 +296,13 @@ class BTSDaemon:
                         "exit_code": 1,
                     },
                 )
+        finally:
+            if not owns_connection:
+                with contextlib.suppress(OSError):
+                    conn.close()
 
-    def _dispatch(self, request: dict, conn: socket.socket) -> None:
+    def _dispatch(self, request: dict, conn: socket.socket) -> bool:
+        """Dispatch a request; return True when queued work owns *conn*."""
         action = request.get("action", "")
 
         if action == "ping":
@@ -272,7 +316,7 @@ class BTSDaemon:
                 },
             )
 
-        elif action == "stop":
+        elif action == "shutdown":
             _send(
                 conn,
                 {
@@ -282,28 +326,147 @@ class BTSDaemon:
                     "exit_code": 0,
                 },
             )
-            self._running = False
+            with self._queue_condition:
+                self._running = False
+                self._queue_condition.notify_all()
 
         elif action == "status":
+            with self._queue_condition:
+                active = self._active_action
+                paused = self._paused
+                queued = len(self._work_queue)
+            state = "paused" if paused else "processing" if active else "idle"
+            details = f"BTS daemon {state} (PID {os.getpid()})"
+            if active:
+                details += f"; current request: {active}"
+            if queued:
+                details += f"; queued requests: {queued}"
             _send(
                 conn,
                 {
                     "status": "ok",
-                    "message": f"BTS daemon running (PID {os.getpid()})",
+                    "message": details,
                     "done": True,
                     "exit_code": 0,
                 },
             )
 
-        elif action == "play":
-            self._handle_play(request, conn)
+        elif action == "list":
+            _send(
+                conn,
+                {
+                    "status": "ok",
+                    "message": self._format_queue(),
+                    "done": True,
+                    "exit_code": 0,
+                },
+            )
+
+        elif action in {"delete", "up", "down", "move"}:
+            self._reorder_queue(action, request, conn)
+
+        elif action == "pause":
+            with self._queue_condition:
+                self._paused = True
+                self._resume_event.clear()
+            _send(
+                conn,
+                {
+                    "status": "ok",
+                    "message": "Processing paused.",
+                    "done": True,
+                    "exit_code": 0,
+                },
+            )
+
+        elif action == "resume" or (
+            action == "play" and "text" not in request
+        ):
+            with self._queue_condition:
+                was_paused = self._paused
+                if was_paused:
+                    self._paused = False
+                    self._resume_event.set()
+                    self._queue_condition.notify_all()
+            message = (
+                "Processing resumed."
+                if was_paused else "No paused processing to resume."
+            )
+            _send(
+                conn,
+                {
+                    "status": "ok",
+                    "message": message,
+                    "done": True,
+                    "exit_code": 0,
+                },
+            )
+
+        elif action == "start":
+            _send(
+                    conn,
+                    {
+                        "status": "ok",
+                        "message": "Daemon is already running.",
+                        "done": True,
+                        "exit_code": 0,
+                    },
+            )
+
+        elif action == "stop":
+            with self._queue_condition:
+                active = self._active_action is not None
+                if active:
+                    self._cancel_current.set()
+            message = (
+                "Stopping current request."
+                if active else "No request is currently processing."
+            )
+            _send(
+                conn,
+                {
+                    "status": "ok",
+                    "message": message,
+                    "done": True,
+                    "exit_code": 0,
+                },
+            )
+
+        elif action == "next":
+            with self._queue_condition:
+                active = self._active_action is not None
+                queued = bool(self._work_queue)
+                if active:
+                    self._cancel_current.set()
+                if self._paused:
+                    self._paused = False
+                    self._resume_event.set()
+                    self._queue_condition.notify_all()
+
+            if active and queued:
+                message = "Current task skipped; moving to the next task."
+            elif active:
+                message = "Current task skipped; no next task is queued."
+            elif queued:
+                message = "Continuing with the next queued task."
+            else:
+                message = "No task is currently processing."
+            _send(
+                conn,
+                {
+                    "status": "ok",
+                    "message": message,
+                    "done": True,
+                    "exit_code": 0,
+                },
+            )
 
         elif action == "save":
-            self._handle_save(request, conn)
-
+            return self._enqueue(request, conn)
         elif action == "epub":
-            self._handle_epub(request, conn)
-
+            return self._enqueue(request, conn)
+        elif action == "play":
+            return self._enqueue(request, conn)
         else:
             _send(
                 conn,
@@ -314,6 +477,217 @@ class BTSDaemon:
                     "exit_code": 1,
                 },
             )
+        return False
+
+    def _enqueue(self, request: dict, conn: socket.socket) -> bool:
+        with self._queue_condition:
+            self._work_queue.append((request, conn))
+            position = len(self._work_queue)
+            self._queue_condition.notify()
+        _send(
+            conn,
+            {
+                "status": "progress",
+                "message": f"Request queued (position {position}).",
+            },
+        )
+        return True
+
+    @staticmethod
+    def _task_description(request: dict) -> str:
+        action = request.get("action", "request")
+        if action == "epub":
+            detail = Path(str(request.get("epub_path", ""))).name
+        elif action == "save":
+            detail = Path(str(request.get("output", ""))).name
+        else:
+            detail = " ".join(str(request.get("text", "")).split())[:60]
+        return f"{action}: {detail}" if detail else action
+
+    def _format_queue(self) -> str:
+        with self._queue_condition:
+            active = self._active_request
+            pending = list(self._work_queue)
+        if active is None and not pending:
+            return "The queue is empty."
+
+        lines = ["Task queue:"]
+        position = 1
+        if active is not None:
+            lines.append(
+                f"  {position}. [running] {self._task_description(active)}"
+            )
+            position += 1
+        for request, _ in pending:
+            lines.append(
+                f"  {position}. [pending] {self._task_description(request)}"
+            )
+            position += 1
+        return "\n".join(lines)
+
+    def _reorder_queue(
+        self, action: str, request: dict, conn: socket.socket
+    ) -> None:
+        fields = ("number",) if action in {"delete", "up", "down"} else (
+            "from", "to"
+        )
+        values: list[int] = []
+        for field in fields:
+            value = request.get(field)
+            if isinstance(value, bool) or not isinstance(value, int):
+                self._send_exc(
+                    conn, ValueError(f"'{field}' must be a positive integer.")
+                )
+                return
+            if value < 1:
+                self._send_exc(
+                    conn, ValueError(f"'{field}' must be a positive integer.")
+                )
+                return
+            values.append(value)
+
+        removed: tuple[dict, socket.socket] | None = None
+        with self._queue_condition:
+            active_offset = 1 if self._active_request is not None else 0
+            pending = list(self._work_queue)
+            total = active_offset + len(pending)
+
+            if action == "delete":
+                number = values[0]
+                if number <= active_offset:
+                    error = "The running task cannot be deleted."
+                elif number > total:
+                    error = f"No task exists at position {number}."
+                else:
+                    removed = pending.pop(number - active_offset - 1)
+                    self._work_queue = deque(pending)
+                    error = ""
+                message = f"Task {number} deleted."
+
+            elif action in {"up", "down"}:
+                number = values[0]
+                if number <= active_offset:
+                    error = "The running task cannot be moved."
+                elif number > total:
+                    error = f"No task exists at position {number}."
+                else:
+                    index = number - active_offset - 1
+                    neighbor = index - 1 if action == "up" else index + 1
+                    if neighbor < 0 or neighbor >= len(pending):
+                        message = (
+                            f"Task {number} is already at the "
+                            f"{'front' if action == 'up' else 'end'} "
+                            "of the queue."
+                        )
+                    else:
+                        pending[index], pending[neighbor] = (
+                            pending[neighbor], pending[index]
+                        )
+                        self._work_queue = deque(pending)
+                        message = f"Task moved {action}."
+                    error = ""
+
+            else:
+                source, destination = values
+                if source <= active_offset:
+                    error = "The running task cannot be moved."
+                elif source > total:
+                    error = f"No task exists at position {source}."
+                elif not pending:
+                    error = "There are no pending tasks to move."
+                else:
+                    first_pending = active_offset + 1
+                    target = min(max(destination, first_pending), total)
+                    item = pending.pop(source - active_offset - 1)
+                    pending.insert(target - active_offset - 1, item)
+                    self._work_queue = deque(pending)
+                    error = ""
+                    message = (
+                        f"Task {source} moved to position {target}."
+                    )
+
+        if removed is not None:
+            _, task_conn = removed
+            with contextlib.suppress(OSError):
+                _send(
+                    task_conn,
+                    {
+                        "status": "error",
+                        "message": "Request removed from the queue.",
+                        "done": True,
+                        "exit_code": 1,
+                    },
+                )
+            with contextlib.suppress(OSError):
+                task_conn.close()
+
+        if error:
+            self._send_exc(conn, ValueError(error))
+        else:
+            _send(
+                conn,
+                {
+                    "status": "ok",
+                    "message": message,
+                    "done": True,
+                    "exit_code": 0,
+                },
+            )
+
+    def _checkpoint(self) -> None:
+        """Wait through a pause or raise when the active request is stopped."""
+        while True:
+            if self._cancel_current.is_set():
+                raise SynthesisCancelled("Request stopped.")
+            if self._resume_event.wait(timeout=0.1):
+                break
+        if self._cancel_current.is_set():
+            raise SynthesisCancelled("Request stopped.")
+
+    def _work_loop(self) -> None:
+        while True:
+            with self._queue_condition:
+                while (
+                    self._running
+                    and (self._paused or not self._work_queue)
+                ):
+                    self._queue_condition.wait()
+                if not self._running:
+                    return
+                request, conn = self._work_queue.popleft()
+                action = request.get("action", "")
+                self._active_action = action
+                self._active_request = request
+                self._cancel_current.clear()
+            try:
+                self._checkpoint()
+                with self._capture_stdout(conn):
+                    if action == "play":
+                        self._handle_play(request, conn)
+                    elif action == "save":
+                        self._handle_save(request, conn)
+                    else:
+                        self._handle_epub(request, conn)
+            except SynthesisCancelled:
+                with contextlib.suppress(OSError):
+                    _send(
+                        conn,
+                        {
+                            "status": "ok",
+                            "message": "Request stopped.",
+                            "done": True,
+                            "exit_code": 0,
+                        },
+                    )
+            except Exception as exc:  # noqa: BLE001
+                self._send_exc(conn, exc)
+            finally:
+                with self._queue_condition:
+                    self._active_action = None
+                    self._active_request = None
+                    self._queue_condition.notify_all()
+                with contextlib.suppress(OSError):
+                    conn.close()
 
     # ------------------------------------------------------------------
     # Stdout capture context manager
@@ -366,6 +740,7 @@ class BTSDaemon:
 
     def _handle_play(self, request: dict, conn: socket.socket) -> None:
         from bts.constants import EXIT_GPU_BUSY
+        from bts.device import resolve_device
         from bts.errors import GpuMemoryError
         from bts.synthesis import synthesize_and_play
 
@@ -373,27 +748,36 @@ class BTSDaemon:
         lang = request.get("lang", "es")
         voice = request.get("voice")
         speed = float(request.get("speed", 1.0))
-        device = request.get("device", "cpu")
+        max_pause = float(
+            request.get("max_pause", DEFAULT_MAX_PAUSE_SECONDS)
+        )
+        requested_device = request.get("device", "auto")
         lexicon = self._build_lexicon(request)
 
         with self._capture_stdout(conn):
             try:
+                device = resolve_device(requested_device)
                 synthesize_and_play(
                     prepare_text(text, lang, lexicon),
                     lang_code=lang,
                     voice=voice,
                     display=False,  # Karaoke requires a foreground process
                     speed=speed,
+                    max_pause_seconds=max_pause,
                     device=device,
+                    checkpoint=self._checkpoint,
                 )
                 _send(conn, {"status": "ok", "done": True, "exit_code": 0})
             except GpuMemoryError as exc:
                 self._send_exc(conn, exc, EXIT_GPU_BUSY)
+            except SynthesisCancelled:
+                raise
             except Exception as exc:  # noqa: BLE001
                 self._send_exc(conn, exc)
 
     def _handle_save(self, request: dict, conn: socket.socket) -> None:
         from bts.constants import EXIT_GPU_BUSY
+        from bts.device import resolve_device
         from bts.errors import GpuMemoryError
         from bts.synthesis import synthesize_text_to_file
 
@@ -401,7 +785,10 @@ class BTSDaemon:
         lang = request.get("lang", "es")
         voice = request.get("voice")
         speed = float(request.get("speed", 1.0))
-        device = request.get("device", "cpu")
+        max_pause = float(
+            request.get("max_pause", DEFAULT_MAX_PAUSE_SECONDS)
+        )
+        requested_device = request.get("device", "auto")
         output = request["output"]
         audio_format = request.get("format", "flac")
         mp3_quality = int(request.get("mp3_quality", DEFAULT_MP3_QUALITY))
@@ -409,24 +796,30 @@ class BTSDaemon:
 
         with self._capture_stdout(conn):
             try:
+                device = resolve_device(requested_device)
                 synthesize_text_to_file(
                     prepare_text(text, lang, lexicon),
                     output,
                     lang_code=lang,
                     voice=voice,
                     speed=speed,
+                    max_pause_seconds=max_pause,
                     device=device,
                     audio_format=audio_format,
                     mp3_quality=mp3_quality,
+                    checkpoint=self._checkpoint,
                 )
                 _send(conn, {"status": "ok", "done": True, "exit_code": 0})
             except GpuMemoryError as exc:
                 self._send_exc(conn, exc, EXIT_GPU_BUSY)
+            except SynthesisCancelled:
+                raise
             except Exception as exc:  # noqa: BLE001
                 self._send_exc(conn, exc)
 
     def _handle_epub(self, request: dict, conn: socket.socket) -> None:
         from bts.constants import EXIT_GPU_BUSY
+        from bts.device import resolve_device
         from bts.epub import process_epub_book
         from bts.errors import GpuMemoryError
 
@@ -434,7 +827,10 @@ class BTSDaemon:
         lang = request.get("lang", "es")
         voice = request.get("voice")
         speed = float(request.get("speed", 1.0))
-        device = request.get("device", "cpu")
+        max_pause = float(
+            request.get("max_pause", DEFAULT_MAX_PAUSE_SECONDS)
+        )
+        requested_device = request.get("device", "auto")
         output = request.get("output")
         audio_format = request.get("format", "flac")
         mp3_quality = int(request.get("mp3_quality", DEFAULT_MP3_QUALITY))
@@ -443,6 +839,7 @@ class BTSDaemon:
 
         with self._capture_stdout(conn):
             try:
+                device = resolve_device(requested_device)
                 failed = process_epub_book(
                     epub_path=epub_path,
                     lang_code=lang,
@@ -452,10 +849,12 @@ class BTSDaemon:
                     section_start=section_start,
                     display=False,  # Karaoke requires a foreground process
                     speed=speed,
+                    max_pause_seconds=max_pause,
                     device=device,
                     audio_format=audio_format,
                     mp3_quality=mp3_quality,
                     lexicon=lexicon,
+                    checkpoint=self._checkpoint,
                 )
                 _send(
                     conn,
@@ -467,6 +866,8 @@ class BTSDaemon:
                 )
             except GpuMemoryError as exc:
                 self._send_exc(conn, exc, EXIT_GPU_BUSY)
+            except SynthesisCancelled:
+                raise
             except Exception as exc:  # noqa: BLE001
                 self._send_exc(conn, exc)
 

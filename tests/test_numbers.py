@@ -247,3 +247,7 @@ class TestPrepareText:
         text = "有3只猫"
         result = prepare_text(text, "zh", _empty_lexicon())
         assert result == text
+
+    def test_prepare_text_removes_ignored_strings(self):
+        result = prepare_text("ab\u2060cd", "zh", _empty_lexicon())
+        assert result == "abcd"

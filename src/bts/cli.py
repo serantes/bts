@@ -19,8 +19,8 @@ Features:
       be used as a pronunciation dictionary. With ``--ipa`` every word also
       gets the phonemes that Kokoro would use, to correct them by hand;
       ``--ipa LANG`` generates them with another language than ``--lang``.
-    * Runs on the CPU by default. The GPU is optional (``--device``); when it
-      is busy or full, a clear message is shown instead of a crash.
+    * Automatically selects the GPU when it has enough free memory, otherwise
+      uses the CPU. The choice can be overridden with ``--device``.
 
 Requirements:
     pip install kokoro soundfile numpy torch
@@ -40,6 +40,7 @@ Examples:
     bts --epub book.epub --analyze
     bts --epub book.epub --analyze --ipa
     bts --epub book.epub --analyze --lang es --ipa us
+    bts --clipboard
 
 
 Exit status:
@@ -58,7 +59,12 @@ import sys
 
 from bts.analysis import run_analysis
 from bts.audio import require_ffplay, require_mp3_encoder
-from bts.constants import AUDIO_FORMATS, DEFAULT_MP3_QUALITY, EXIT_GPU_BUSY
+from bts.constants import (
+    AUDIO_FORMATS,
+    DEFAULT_MAX_PAUSE_SECONDS,
+    DEFAULT_MP3_QUALITY,
+    EXIT_GPU_BUSY,
+)
 from bts.device import resolve_device
 from bts.dictionary import PronunciationDictionary, load_dictionary
 from bts.epub import process_epub_book
@@ -91,6 +97,21 @@ def positive_float(value: str) -> float:
     return number
 
 
+def non_negative_float(value: str) -> float:
+    """Parse a finite, non-negative float for argparse."""
+    try:
+        number = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"'{value}' is not a number"
+        ) from None
+    if not math.isfinite(number) or number < 0:
+        raise argparse.ArgumentTypeError(
+            "the value must be finite and at least 0"
+        )
+    return number
+
+
 def _package_version() -> str:
     """Return the installed version of BTS."""
     from bts import __version__
@@ -113,6 +134,21 @@ def build_parser() -> argparse.ArgumentParser:
             "                  # Reads directly via streaming\n"
             "  bts --epub libro.epub --output"
             "         # Exports to folder named after EPUB\n"
+            "\n"
+            "Daemon commands:\n"
+            "  bts daemon start             Start the background daemon\n"
+            "  bts daemon status            Show daemon status\n"
+            "  bts daemon pause             Pause the current conversion\n"
+            "  bts daemon play|resume       Resume a paused conversion\n"
+            "  bts daemon stop              Stop the current conversion\n"
+            "  bts daemon next              Skip to the next queued task\n"
+            "  bts daemon list              List active and pending tasks\n"
+            "  bts daemon delete <number>   Delete a pending task\n"
+            "  bts daemon up|down <number>  Move a pending task in the queue\n"
+            "  bts daemon move <from> <to>  Move a pending task to a"
+            " position\n"
+            "  bts daemon shutdown          Shut down the daemon\n"
+            "Run 'bts daemon help' for daemon command details.\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -151,12 +187,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Speech speed multiplier (default: 1.0).",
     )
     parser.add_argument(
+        "--max-pause",
+        type=non_negative_float,
+        default=DEFAULT_MAX_PAUSE_SECONDS,
+        metavar="SECONDS",
+        help=(
+            "Maximum duration of a text-marker pause in seconds "
+            f"(default: {DEFAULT_MAX_PAUSE_SECONDS})."
+        ),
+    )
+    parser.add_argument(
         "--device",
         choices=("cpu", "cuda", "auto"),
-        default="cpu",
+        default="auto",
         help=(
-            "Where to run the model: 'cpu' (default), 'cuda' (GPU) or "
-            "'auto' (GPU if it has free memory, otherwise CPU)."
+            "Where to run the model: 'auto' (default, GPU if available "
+            "with enough free memory, otherwise CPU), 'cpu' or 'cuda'."
         ),
     )
     parser.add_argument(
@@ -180,6 +226,15 @@ def build_parser() -> argparse.ArgumentParser:
             "Path to a UTF-8 text file, used like --epub but with a plain "
             "text: read aloud, saved with --output, or analyzed with "
             "--analyze."
+        ),
+    )
+    source.add_argument(
+        "--clipboard",
+        action="store_true",
+        default=False,
+        help=(
+            "Read the current X11 primary selection (or clipboard) and speak "
+            "it. Requires wl-paste, xclip, xsel, or xdotool to be installed."
         ),
     )
     parser.add_argument(
@@ -335,7 +390,7 @@ def _handle_daemon_command(argv: list[str]) -> int:
     sub = p.add_subparsers(dest="action")
 
     start_p = sub.add_parser(
-        "start", help="Start the daemon in background."
+        "start", help="Start the daemon."
     )
     start_p.add_argument(
         "--fg",
@@ -353,20 +408,59 @@ def _handle_daemon_command(argv: list[str]) -> int:
         ),
     )
 
-    sub.add_parser("stop", help="Stop the running daemon.")
+    sub.add_parser("pause", help="Pause the current conversion.")
+    sub.add_parser("stop", help="Stop the current conversion.")
+    sub.add_parser(
+        "next", help="Skip the current task and continue the queue."
+    )
+    sub.add_parser("shutdown", help="Shut down the daemon process.")
     sub.add_parser("status", help="Show daemon status.")
+    sub.add_parser("list", help="List the active and pending tasks.")
+    for action, help_text in (
+        ("delete", "Delete a pending task."),
+        ("up", "Move a pending task one position toward execution."),
+        ("down", "Move a pending task one position away from execution."),
+    ):
+        command = sub.add_parser(action, help=help_text)
+        command.add_argument("number", type=int)
+    move_p = sub.add_parser("move", help="Move a pending task to a position.")
+    move_p.add_argument("from_number", type=int, metavar="from")
+    move_p.add_argument("to_number", type=int, metavar="to")
+    sub.add_parser("play", help="Resume a paused conversion.")
+    sub.add_parser("resume", help="Resume a paused conversion.")
+    sub.add_parser("help", help="Show daemon command help.")
 
     parsed = p.parse_args(argv)
     if parsed.action is None:
         p.print_help()
-        return 1
+        return 0
+
+    if parsed.action == "help":
+        p.print_help()
+        return 0
 
     if parsed.action == "start":
         return _daemon_start(parsed.fg, parsed.timeout * 60)
     if parsed.action == "stop":
         return _daemon_stop()
+    if parsed.action == "next":
+        return _daemon_control("next")
+    if parsed.action == "pause":
+        return _daemon_control("pause")
+    if parsed.action in {"play", "resume"}:
+        return _daemon_control(parsed.action)
+    if parsed.action == "shutdown":
+        return _daemon_shutdown()
     if parsed.action == "status":
         return _daemon_status()
+    if parsed.action == "list":
+        return _daemon_control("list")
+    if parsed.action in {"delete", "up", "down"}:
+        return _daemon_control(parsed.action, number=parsed.number)
+    if parsed.action == "move":
+        return _daemon_control(
+            "move", **{"from": parsed.from_number, "to": parsed.to_number}
+        )
     return 1
 
 
@@ -426,11 +520,31 @@ def _daemon_start(foreground: bool, timeout_seconds: int) -> int:
 
 
 def _daemon_stop() -> int:
-    """Stop the running BTS daemon."""
+    """Stop the current conversion without shutting down the daemon."""
+    return _daemon_control("stop")
+
+
+def _daemon_control(action: str, **parameters: int) -> int:
+    """Send a conversion control action to the daemon."""
+    from bts.client import control_daemon
+
+    result = control_daemon(action, **parameters)
+    if result is not None:
+        message, success = result
+        prefix = "[INFO]" if success else "[ERROR]"
+        print(f"{prefix} {message}")
+        return 0 if success else 1
+    else:
+        print("[INFO] No BTS daemon is running.")
+        return 1
+
+
+def _daemon_shutdown() -> int:
+    """Shut down the daemon process."""
     from bts.client import stop_daemon
 
     if stop_daemon():
-        print("[INFO] BTS daemon stopped.")
+        print("[INFO] BTS daemon shutting down.")
     else:
         print("[INFO] No BTS daemon is running.")
     return 0
@@ -525,6 +639,76 @@ def _stdin_has_data(timeout: float = 2.0) -> bool:
     return bool(ready)
 
 
+def read_clipboard() -> str:
+    """Return the text currently in the X11 primary selection or clipboard.
+
+    Tries ``wl-paste``, ``xclip``, ``xsel``, and ``xdotool`` in that order.
+    The primary selection is used when available because it reflects the most
+    recent mouse selection; the CLIPBOARD is used as a fallback.
+
+    Returns:
+        The clipboard text, stripped of leading/trailing whitespace.
+
+    Raises:
+        TTSError: If no clipboard tool is found or the selection is empty.
+    """
+    import subprocess
+
+    tools = [
+        ["wl-paste", "-p"],
+        ["xclip", "-selection", "primary", "-o"],
+        ["xclip", "-selection", "clipboard", "-o"],
+        ["xsel", "--primary", "--output"],
+        ["xsel", "--clipboard", "--output"],
+        ["xdotool", "getactivewindow", "selectall", "--clearmodifiers",
+         "type", "--clearmodifiers"],  # intentionally last / unlikely
+    ]
+    # Simpler ordered list: primary first, clipboard fallback, two tools.
+    ordered = [
+        (["wl-paste", "-p"], "wl-paste"),
+        (["xclip", "-selection", "primary", "-o"], "xclip (primary)"),
+        (["xclip", "-selection", "clipboard", "-o"], "xclip (clipboard)"),
+        (["xsel", "--primary", "--output"], "xsel (primary)"),
+        (["xsel", "--clipboard", "--output"], "xsel (clipboard)"),
+        (["xdotool", "getactivewindow"], None),   # probe only
+    ]
+
+    errors: list[str] = []
+    for cmd, label in ordered:
+        if label is None:
+            continue  # probe entries skipped here
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            if result.returncode == 0:
+                text = result.stdout.strip()
+                if text:
+                    return text
+                # Empty selection — try next tool/selection type.
+                errors.append(f"{label}: empty")
+            else:
+                errors.append(f"{label}: exit {result.returncode}")
+        except FileNotFoundError:
+            errors.append(f"{label}: not found")
+        except subprocess.TimeoutExpired:
+            errors.append(f"{label}: timed out")
+
+    if all("not found" in e for e in errors):
+        raise TTSError(
+            "No clipboard tool found. Install wl-paste, xclip or xsel:\n"
+            "  sudo apt install wl-clipboard\n"
+            "  sudo apt install xclip\n"
+            "  sudo apt install xsel"
+        )
+    raise TTSError(
+        "The clipboard/primary selection is empty or could not be read."
+    )
+
+
 def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     """Execute the action selected on the command line.
 
@@ -555,7 +739,6 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         if os.path.isfile(candidate):
             args.dictionary = candidate
             print(f"[INFO] Auto-loading dictionary '{candidate}'.")
-
 
     if args.test:
         lang = args.test.lower()
@@ -613,6 +796,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                         "lang": args.lang,
                         "voice": args.voice,
                         "speed": args.speed,
+                        "max_pause": args.max_pause,
                         "device": args.device,
                         "output": args.output,
                         "format": audio_format,
@@ -642,6 +826,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             section_start=args.section_start,
             display=args.display,
             speed=args.speed,
+            max_pause_seconds=args.max_pause,
             device=device,
             audio_format=audio_format,
             mp3_quality=args.mp3_quality,
@@ -650,7 +835,9 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         return 1 if failed else 0
 
     default_name = None
-    if args.txt:
+    if args.clipboard:
+        text_to_speak = read_clipboard()
+    elif args.txt:
         text_to_speak = read_text_file(args.txt)
         default_name = os.path.splitext(os.path.basename(args.txt))[0]
     elif args.text and args.text != "-":
@@ -679,6 +866,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                     "lang": args.lang,
                     "voice": args.voice,
                     "speed": args.speed,
+                    "max_pause": args.max_pause,
                     "device": args.device,
                     "format": audio_format,
                     "mp3_quality": args.mp3_quality,
@@ -703,6 +891,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             lang_code=args.lang,
             voice=args.voice,
             speed=args.speed,
+            max_pause_seconds=args.max_pause,
             device=device,
             audio_format=audio_format,
             mp3_quality=args.mp3_quality,
@@ -721,6 +910,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 "lang": args.lang,
                 "voice": args.voice,
                 "speed": args.speed,
+                "max_pause": args.max_pause,
                 "device": args.device,
                 "dictionary": args.dictionary,
                 "dictionary_ignore_case": args.dictionary_ignore_case,
@@ -737,6 +927,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         voice=args.voice,
         display=args.display,
         speed=args.speed,
+        max_pause_seconds=args.max_pause,
         device=device,
     )
     return 0

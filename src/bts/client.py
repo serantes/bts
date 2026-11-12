@@ -122,12 +122,37 @@ def ping_daemon() -> bool:
 
 
 def stop_daemon() -> bool:
-    """Ask the daemon to stop.
+    """Ask the daemon process to shut down.
 
     Returns:
         ``True`` if the daemon was running and acknowledged the request.
     """
-    return try_daemon_request({"action": "stop"}) is not None
+    return try_daemon_request({"action": "shutdown"}) is not None
+
+
+def control_daemon(
+    action: str, **parameters: int
+) -> tuple[str, bool] | None:
+    """Send a control action and return its message and success state."""
+    sock = _connect()
+    if sock is None:
+        return None
+    try:
+        _send(sock, {"action": action, **parameters})
+        for msg in _iter_responses(sock):
+            if msg.get("done"):
+                return (
+                    str(msg.get("message", "")),
+                    msg.get("status") != "error",
+                )
+    except OSError:
+        return None
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+    return None
 
 
 def get_daemon_status() -> str | None:

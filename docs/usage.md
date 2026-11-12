@@ -102,6 +102,32 @@ bts --epub libro.epub --output --format mp3
 bts --help
 ```
 
+### Control del daemon
+
+Las solicitudes de síntesis enviadas al daemon se procesan en orden. Mientras
+una se está procesando, `status` y los controles siguen respondiendo y las
+nuevas solicitudes quedan en cola.
+
+```bash
+bts daemon start       # Inicia el daemon si está apagado
+bts daemon status      # Consulta el estado aunque haya una conversión activa
+bts daemon pause       # Pausa la conversión en el siguiente fragmento seguro
+bts daemon play        # Reanuda una conversión pausada; si no está pausada, no hace nada
+bts daemon resume      # Alias de play
+bts daemon stop        # Detiene el trabajo actual; conserva las solicitudes en cola
+bts daemon next        # Salta el trabajo actual y continúa con el siguiente de la cola
+bts daemon list        # Muestra la tarea activa y las pendientes
+bts daemon delete 3    # Borra la tarea pendiente indicada por su posición
+bts daemon up 4        # Adelanta una posición la tarea pendiente
+bts daemon down 2      # Retrasa una posición la tarea pendiente
+bts daemon move 4 2    # Mueve la tarea 4 a la posición 2
+bts daemon shutdown    # Apaga el daemon
+```
+
+La tarea activa aparece como posición `1` y no se puede borrar ni mover. Si
+hay una tarea activa, `move ... 1` coloca la tarea justo detrás de ella. Los
+números demasiado grandes en `move` equivalen a la última posición.
+
 ---
 
 ## 4. Opciones de la línea de comandos
@@ -126,7 +152,8 @@ bts [opciones] [texto]
 | `--lang CÓDIGO` | `es` | Código ISO del idioma (ver [§6](#6-idiomas-y-voces)). |
 | `--voice VOZ` | Primera voz del idioma | ID de la voz neuronal. |
 | `--speed N` | `1.0` | Multiplicador de velocidad. `0.5` = muy lento, `2.0` = muy rápido. |
-| `--device cpu\|cuda\|auto` | `cpu` | Dónde ejecutar el modelo. `auto` usa la GPU si tiene memoria libre. |
+| `--max-pause SEGUNDOS` | `0.5` | Duración máxima de las pausas de texto. Varias marcas seguidas producen una sola pausa. `0` desactiva estas pausas. |
+| `--device cpu\|cuda\|auto` | `auto` | Dónde ejecutar el modelo. Usa la GPU si está disponible y tiene memoria libre; si no, usa la CPU. |
 | `--display` | — | Muestra el texto en pantalla resaltando las palabras mientras se hablan. |
 
 ### Salida de audio
@@ -182,6 +209,15 @@ bts "Buenos días, ¿cómo estás?"
 bts --lang us "Good morning, how are you?"
 bts --lang fr --voice ff_siwis "Bonjour le monde."
 ```
+
+La raya `—` no se pronuncia: por defecto inserta medio segundo de silencio.
+Los marcadores y sus duraciones se configuran en `PAUSE_MARKERS` de
+`src/bts/constants.py`, para poder añadir otros textos o palabras más adelante.
+`--max-pause` limita la duración máxima; marcas consecutivas, como `——` o
+`— —`, se agrupan en una sola pausa. Se puede usar `--max-pause 0` para
+desactivar estas pausas.
+El carácter invisible U+2060 se elimina del texto; se pueden añadir más
+cadenas a `IGNORED_STRINGS` en `src/bts/constants.py`.
 
 **Fichero de texto:**
 ```bash

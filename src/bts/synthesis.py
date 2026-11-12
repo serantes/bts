@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import re
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 
@@ -17,8 +18,10 @@ from bts.audio import (
     to_float32,
 )
 from bts.constants import (
+    DEFAULT_MAX_PAUSE_SECONDS,
     DEFAULT_MP3_QUALITY,
     ENGLISH_LANG_CODES,
+    PAUSE_MARKERS,
     PHONEME_CHUNK_CHARS,
     PHONEME_MARKUP_RE,
     SAMPLE_RATE,
@@ -34,11 +37,29 @@ from bts.languages import (
     TEST_TEXTS,
     get_default_voice,
 )
+from bts.numbers import remove_ignored_strings
 from bts.phonemes import _split_phonemes, chunk_phonemes, strip_phoneme_markup
 from bts.textio import split_into_chunks
 
 if TYPE_CHECKING:
     from kokoro import KPipeline
+
+
+_PAUSE_MARKER_RE = re.compile(
+    "|".join(
+        re.escape(marker)
+        for marker in sorted(PAUSE_MARKERS, key=len, reverse=True)
+    )
+)
+
+
+class SynthesisCancelled(Exception):
+    """Raised when a daemon request is stopped between audio chunks."""
+
+
+def _checkpoint(checkpoint: Callable[[], None] | None) -> None:
+    if checkpoint is not None:
+        checkpoint()
 
 
 def _generate_with_phonemes(
@@ -85,29 +106,14 @@ def _generate_with_phonemes(
                         yield plain, audio
 
 
-def generate_speech(
+def _generate_speech_text(
     pipeline: KPipeline,
     internal_lang: str,
     text: str,
     voice: str,
     speed: float,
 ):
-    """Generate speech for a text and yield ``(graphemes, audio)`` pairs.
-
-    Text with ``[word](/phonemes/)`` markup, produced by the pronunciation
-    dictionary, is handled by Kokoro itself in English and by
-    :func:`_generate_with_phonemes` in the other languages.
-
-    Args:
-        pipeline: The Kokoro pipeline of the language.
-        internal_lang: Kokoro internal language code (``"e"``, ``"a"``...).
-        text: Text to speak.
-        voice: Voice identifier or path.
-        speed: Speech speed multiplier.
-
-    Yields:
-        ``(graphemes, audio)`` pairs, one per generated chunk.
-    """
+    """Generate speech for a marker-free text segment."""
     if internal_lang not in ENGLISH_LANG_CODES and (
         PHONEME_MARKUP_RE.search(text)
     ):
@@ -120,6 +126,63 @@ def generate_speech(
             yield graphemes, audio
 
 
+def generate_speech(
+    pipeline: KPipeline,
+    internal_lang: str,
+    text: str,
+    voice: str,
+    speed: float,
+    max_pause_seconds: float = DEFAULT_MAX_PAUSE_SECONDS,
+):
+    """Generate speech and insert silence for configured text markers.
+
+    Literal markers and their pause durations are configured in
+    ``bts.constants.PAUSE_MARKERS`` and capped by ``max_pause_seconds``.
+    Consecutive markers separated only by whitespace become one pause. The
+    markers themselves are not spoken.
+    """
+    if not math.isfinite(max_pause_seconds) or max_pause_seconds < 0:
+        raise ValueError("max_pause_seconds must be finite and non-negative")
+
+    text = remove_ignored_strings(text)
+    matches = list(_PAUSE_MARKER_RE.finditer(text))
+    position = 0
+    index = 0
+    while index < len(matches):
+        match = matches[index]
+        speech_text = text[position:match.start()]
+        if speech_text.strip():
+            yield from _generate_speech_text(
+                pipeline, internal_lang, speech_text, voice, speed
+            )
+
+        end_index = index + 1
+        while (
+            end_index < len(matches)
+            and not text[
+                matches[end_index - 1].end():matches[end_index].start()
+            ].strip()
+        ):
+            end_index += 1
+        marker_pause = max(
+            PAUSE_MARKERS[item.group()]
+            for item in matches[index:end_index]
+        )
+        pause_seconds = min(marker_pause, max_pause_seconds)
+        if pause_seconds > 0:
+            yield "", np.zeros(
+                int(SAMPLE_RATE * pause_seconds), dtype=np.float32
+            )
+        position = matches[end_index - 1].end()
+        index = end_index
+
+    speech_text = text[position:]
+    if speech_text.strip():
+        yield from _generate_speech_text(
+            pipeline, internal_lang, speech_text, voice, speed
+        )
+
+
 def synthesize_and_play(
     text: str,
     lang_code: str = "es",
@@ -128,6 +191,8 @@ def synthesize_and_play(
     speed: float = 1.0,
     device: str = "cpu",
     title: str = "",
+    checkpoint: Callable[[], None] | None = None,
+    max_pause_seconds: float = DEFAULT_MAX_PAUSE_SECONDS,
 ) -> None:
     """Generate speech from text and stream it to ``ffplay``.
 
@@ -162,13 +227,15 @@ def synthesize_and_play(
             yield from generate_speech(
                 pipeline, internal, title, selected_voice,
                 speed * TITLE_SPEED,
+                max_pause_seconds,
             )
             yield "", np.zeros(
                 int(SAMPLE_RATE * TITLE_PAUSE_SECONDS), dtype=np.float32
             )
         if text:
             yield from generate_speech(
-                pipeline, internal, text, selected_voice, speed
+                pipeline, internal, text, selected_voice, speed,
+                max_pause_seconds,
             )
 
     generator = segments()
@@ -177,6 +244,7 @@ def synthesize_and_play(
     try:
         with AudioPlayer() as player:
             for graphemes, audio in generator:
+                _checkpoint(checkpoint)
                 samples = to_float32(audio)
                 player.write(samples)
                 if karaoke is not None and graphemes.strip():
@@ -184,7 +252,7 @@ def synthesize_and_play(
                         graphemes.strip(), len(samples) / SAMPLE_RATE
                     )
         completed = True
-    except TTSError:
+    except (TTSError, SynthesisCancelled):
         raise
     except Exception as exc:
         if is_cuda_oom(exc):
@@ -208,6 +276,8 @@ def synthesize_epub_section_to_file(
     device: str = "cpu",
     audio_format: str = "flac",
     mp3_quality: int = DEFAULT_MP3_QUALITY,
+    checkpoint: Callable[[], None] | None = None,
+    max_pause_seconds: float = DEFAULT_MAX_PAUSE_SECONDS,
 ) -> None:
     """Synthesize a section (title, pause, body) into a FLAC or MP3 file.
 
@@ -253,7 +323,9 @@ def synthesize_epub_section_to_file(
                     title_text,
                     selected_voice,
                     speed * TITLE_SPEED,
+                    max_pause_seconds,
                 ):
+                    _checkpoint(checkpoint)
                     if audio is not None:
                         samples = to_float32(audio)
                         out.write(samples)
@@ -267,13 +339,16 @@ def synthesize_epub_section_to_file(
 
             chunks = split_into_chunks(body_text)
             for number, chunk in enumerate(chunks, 1):
+                _checkpoint(checkpoint)
                 for _, audio in generate_speech(
                     pipeline,
                     lang_info["internal"],
                     chunk,
                     selected_voice,
                     speed,
+                    max_pause_seconds,
                 ):
+                    _checkpoint(checkpoint)
                     if audio is not None:
                         samples = to_float32(audio)
                         out.write(samples)
@@ -291,7 +366,7 @@ def synthesize_epub_section_to_file(
             raise TTSError(f"No audio was generated for '{output_filepath}'.")
         os.replace(temp_filepath, output_filepath)
         finished = True
-    except TTSError:
+    except (TTSError, SynthesisCancelled):
         raise
     except Exception as exc:
         if is_cuda_oom(exc):
@@ -316,6 +391,8 @@ def synthesize_text_to_file(
     device: str = "cpu",
     audio_format: str = "flac",
     mp3_quality: int = DEFAULT_MP3_QUALITY,
+    checkpoint: Callable[[], None] | None = None,
+    max_pause_seconds: float = DEFAULT_MAX_PAUSE_SECONDS,
 ) -> None:
     """Synthesize a text into a single FLAC or MP3 file.
 
@@ -353,6 +430,8 @@ def synthesize_text_to_file(
         device=device,
         audio_format=audio_format,
         mp3_quality=mp3_quality,
+        checkpoint=checkpoint,
+        max_pause_seconds=max_pause_seconds,
     )
     print(f"Audio saved to '{output_filepath}'.")
 

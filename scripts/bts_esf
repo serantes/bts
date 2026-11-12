@@ -42,7 +42,6 @@ fi
 # goes before "--epub" so that it cannot swallow the next argument. exec
 # makes the exit status of bts.py the exit status of this script.
 BTS_ARGS=(
-    --device auto
     --lang es
     --voice "ef_dora"
     --format mp3

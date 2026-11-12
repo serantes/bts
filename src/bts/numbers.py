@@ -50,6 +50,8 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Callable
 
+from bts.constants import IGNORED_STRINGS
+
 # ---------------------------------------------------------------------------
 # Language mapping: BTS ISO code → num2words lang code, or None to skip.
 # ---------------------------------------------------------------------------
@@ -309,4 +311,13 @@ def prepare_text(
     Returns:
         Text ready for synthesis.
     """
-    return lexicon.apply(normalize_numbers(text, lang_code))
+    return lexicon.apply(
+        normalize_numbers(remove_ignored_strings(text), lang_code)
+    )
+
+
+def remove_ignored_strings(text: str) -> str:
+    """Remove configured strings that must be treated as absent."""
+    for ignored in IGNORED_STRINGS:
+        text = text.replace(ignored, "")
+    return text

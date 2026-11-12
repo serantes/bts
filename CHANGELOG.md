@@ -13,8 +13,12 @@ into a properly packaged Python application.
 
 ### Added
 
-- `pyproject.toml` with `src/` layout, entry point `bts = "bts.cli:main"`,
-  optional extras (`ja`, `zh`, `all`, `dev`), and `ruff`/`pytest` config.
+- Responsive daemon controls and a persistent task queue, including pause,
+  resume, stop, `next`, task listing, deletion and reordering.
+- `—`, `!` and `?` pause markers, configurable maximum pause duration, and
+  configurable ignored strings (including the invisible U+2060 character).
+- Automatic device selection: use the GPU when it is available with enough
+  free memory, otherwise fall back to the CPU.
 - `--version` flag.
 - `--ipa [LANG]`: `--analyze` now accepts an optional language code for the
   IPA phoneme lookup, independent of `--lang` (e.g. `--lang es --ipa us` for
@@ -31,9 +35,6 @@ into a properly packaged Python application.
 
 ### Changed
 
-- Monolithic `bts.py` split into focused modules under `src/bts/`:
-  `errors`, `constants`, `languages`, `phonemes`, `dictionary`, `device`,
-  `audio`, `textio`, `synthesis`, `epub`, `analysis`, `cli`.
 - Section title and body now share a single ffplay/ffmpeg stream, eliminating
   the gap between the title announcement and the body text.
 - Section title speed scales with `--speed` (factor `TITLE_SPEED = 0.8`).
@@ -42,7 +43,6 @@ into a properly packaged Python application.
 
 ### Fixed
 
-- `--analyze --ipa` always generated phonemes for English, ignoring `--lang`.
 - `--speed` accepted `nan` and `inf`; they are now rejected with a clear error.
 - `positive_float` now raises `ArgumentTypeError` with `from None` to avoid
   leaking the internal `ValueError` traceback.
