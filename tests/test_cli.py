@@ -102,7 +102,7 @@ def test_version_flag(capsys):
     assert "BTS - Book To Speech" in capsys.readouterr().out
 
 
-# --- --ipa parser tests -------------------------------------------------------
+# --- --ipa parser tests -----------------------------------------------------
 
 
 def test_parser_ipa_absent_gives_none():
@@ -170,7 +170,8 @@ def spy(monkeypatch):
     monkeypatch.setattr(
         cli, "process_epub_book", lambda **kw: calls.update(epub=kw) or 0
     )
-    # Prevent delegation to a live daemon so the stubs above are always reached.
+    # Prevent delegation to a live daemon so the stubs above are always
+    # reached.
     monkeypatch.setattr(_client, "try_daemon_request", lambda req: None)
     return calls
 
@@ -388,13 +389,14 @@ def test_run_analyze_dispatch(monkeypatch, capsys):
     assert "--output is ignored" in capsys.readouterr().err
 
 
-# --- prepare_synthesis ---------------------------------------------------------
+# --- prepare_synthesis -------------------------------------------------------
 
 
 def test_prepare_synthesis_checks_requirements(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "require_ffplay", lambda: calls.append("ffplay"))
-    monkeypatch.setattr(cli, "require_mp3_encoder", lambda: calls.append("mp3"))
+    monkeypatch.setattr(cli, "require_mp3_encoder",
+                        lambda: calls.append("mp3"))
     monkeypatch.setattr(cli, "resolve_device", lambda requested: requested)
     args = parse("--device", "auto")
     assert cli.prepare_synthesis(args, True, "es", needs_mp3=True) == "auto"

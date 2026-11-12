@@ -115,17 +115,19 @@ def test_hunspell_spell_unencodable_word():
 
 
 def test_hunspell_missing_library(monkeypatch):
-    monkeypatch.setattr(analysis.ctypes.util, "find_library", lambda name: None)
+    monkeypatch.setattr(analysis.ctypes.util, "find_library",
+                        lambda name: None)
     monkeypatch.setattr(analysis, "HUNSPELL_SONAMES", ("libnope.so.0",))
     with pytest.raises(errors.TTSError, match="libhunspell"):
         analysis.HunspellAnalyzer._load_library()
 
 
-# --- phonemes and word list ----------------------------------------------------
+# --- phonemes and word list --------------------------------------------------
 
 
 def test_add_phonemes(monkeypatch, fake_pipeline):
-    monkeypatch.setattr(analysis, "get_g2p_pipeline", lambda code: fake_pipeline)
+    monkeypatch.setattr(analysis, "get_g2p_pipeline",
+                        lambda code: fake_pipeline)
     entries, missing = analysis.add_phonemes(["Zorg", " "], "es")
     assert entries[0] == ("Zorg", "[Zorg](/ZORG/)")
     assert entries[1] == (" ", " ") and missing == 1
@@ -134,7 +136,8 @@ def test_add_phonemes(monkeypatch, fake_pipeline):
 def test_add_phonemes_uses_requested_language(monkeypatch, fake_pipeline):
     seen = []
     monkeypatch.setattr(
-        analysis, "get_g2p_pipeline", lambda code: seen.append(code) or fake_pipeline
+        analysis, "get_g2p_pipeline",
+        lambda code: seen.append(code) or fake_pipeline
     )
     analysis.add_phonemes(["x"], "es")
     analysis.add_phonemes(["x"], "us")
@@ -143,7 +146,8 @@ def test_add_phonemes_uses_requested_language(monkeypatch, fake_pipeline):
 
 def test_add_phonemes_forbidden_chars_and_errors(monkeypatch, fake_pipeline):
     fake_pipeline.g2p = lambda text: ("a/b", None)
-    monkeypatch.setattr(analysis, "get_g2p_pipeline", lambda code: fake_pipeline)
+    monkeypatch.setattr(analysis, "get_g2p_pipeline",
+                        lambda code: fake_pipeline)
     entries, missing = analysis.add_phonemes(["w"], "es")
     assert entries == [("w", "w")] and missing == 1
 
@@ -164,7 +168,7 @@ def test_write_word_list_unwritable(tmp_path):
         analysis.write_word_list(str(tmp_path / "no" / "w.dict"), [])
 
 
-# --- run_analysis --------------------------------------------------------------
+# --- run_analysis ------------------------------------------------------------
 
 
 def analysis_args(**kw):
@@ -189,7 +193,8 @@ def test_run_analysis_text(monkeypatch, tmp_path, capsys):
     assert analyzer.closed
 
 
-def test_run_analysis_refuses_existing_target_before_work(monkeypatch, tmp_path):
+def test_run_analysis_refuses_existing_target_before_work(monkeypatch,
+                                                          tmp_path):
     def boom(lang):
         raise AssertionError("must fail before creating the analyzer")
 
@@ -238,7 +243,8 @@ def test_run_analysis_with_ipa_no_lang(monkeypatch, tmp_path, fake_pipeline):
     assert seen_codes == [SUPPORTED_LANGUAGES["es"]["internal"]]
 
 
-def test_run_analysis_with_ipa_lang_override(monkeypatch, tmp_path, fake_pipeline):
+def test_run_analysis_with_ipa_lang_override(monkeypatch, tmp_path,
+                                             fake_pipeline):
     """--ipa LANG uses the override language for phoneme lookup, not --lang."""
     seen_codes = []
 

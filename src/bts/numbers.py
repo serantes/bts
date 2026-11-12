@@ -104,7 +104,8 @@ _ORDINAL_FR = re.compile(
 #   1 → optional leading minus
 #   2 → digit groups separated by . or ,
 _NUMBER_RE = re.compile(
-    r"(?<![/a-zA-Z0-9_.])(-?)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?|\d+(?:[.,]\d+)?)(?![/a-zA-Z0-9_])"
+    r"(?<![/a-zA-Z0-9_.])(-?)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?"
+    r"|\d+(?:[.,]\d+)?)(?![/a-zA-Z0-9_])"
 )
 
 # Kokoro phoneme markup: [word](/phonemes/) — must not be touched.
