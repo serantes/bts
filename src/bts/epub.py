@@ -381,7 +381,7 @@ def process_epub_book(
     lang_code: str,
     voice: str | None,
     output_arg: str | None,
-    section_list: bool,
+    sections_list: bool,
     section_start: str | None,
     display: bool,
     speed: float = 1.0,
@@ -400,7 +400,7 @@ def process_epub_book(
         voice: Voice identifier, or None for the language default.
         output_arg: None to read aloud; ``""`` to export into a directory
             named after the book; any other string is the output directory.
-        section_list: If True, only list the sections and return.
+        sections_list: If True, only list the sections and return.
         section_start: Section number or title substring to start from.
         display: Highlight words on screen while reading aloud.
         speed: Speech speed multiplier for the body text.
@@ -420,7 +420,7 @@ def process_epub_book(
         lexicon = PronunciationDictionary({})
     sections = load_sections(epub_path)
 
-    if section_list:
+    if sections_list:
         print(f"\nSections found in '{epub_path}':")
         print("-" * 60)
         for sec in sections:

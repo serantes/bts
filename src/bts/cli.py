@@ -327,7 +327,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ipa_action.completer = ChoicesCompleter(sorted(SUPPORTED_LANGUAGES))
     parser.add_argument(
-        "--section-list",
+        "--sections-list",
         action="store_true",
         help="List all sections and titles in the EPUB and exit.",
     )
@@ -447,7 +447,7 @@ def _is_daemon_completion() -> bool:
     words = os.environ.get("COMP_LINE", "").split(maxsplit=2)
     return (
         len(words) > 1
-        and os.path.basename(words[0]) == "bts"
+        and os.path.basename(words[0]) in {"bts", "bts-tts"}
         and "daemon".startswith(words[1])
     )
 
@@ -786,9 +786,9 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         device = prepare_synthesis(args, needs_player=True, lang_code=lang)
         return 1 if run_voice_tests(lang, device=device) else 0
 
-    if (args.section_list or args.section_start) and not args.epub:
+    if (args.sections_list or args.section_start) and not args.epub:
         parser.error(
-            "--section-list and --section-start require --epub."
+            "--sections-list and --section-start require --epub."
         )
 
     if args.ipa is not None:
@@ -817,11 +817,11 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
 
     if args.epub:
         audio_format = args.format or "flac"
-        streaming = args.output is None and not args.section_list
+        streaming = args.output is None and not args.sections_list
         exporting_mp3 = args.output is not None and audio_format == "mp3"
         device = "cpu"
         lexicon = PronunciationDictionary({})
-        if not args.section_list:
+        if not args.sections_list:
             if not args.no_daemon:
                 from bts.client import try_daemon_request
 
@@ -858,7 +858,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             lang_code=args.lang,
             voice=args.voice,
             output_arg=args.output,
-            section_list=args.section_list,
+            sections_list=args.sections_list,
             section_start=args.section_start,
             display=args.display,
             speed=args.speed,

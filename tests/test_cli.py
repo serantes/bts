@@ -270,19 +270,19 @@ def test_run_epub_failures_give_status_1(monkeypatch, spy):
     assert run("--epub", "b.epub") == 1
 
 
-def test_run_section_list_skips_device_preparation(monkeypatch, spy):
+def test_run_sections_list_skips_device_preparation(monkeypatch, spy):
     def boom(*a, **k):
         raise AssertionError("not needed")
 
     monkeypatch.setattr(cli, "prepare_synthesis", boom)
-    assert run("--epub", "b.epub", "--section-list") == 0
-    assert spy["epub"]["section_list"] is True
+    assert run("--epub", "b.epub", "--sections-list") == 0
+    assert spy["epub"]["sections_list"] is True
 
 
 @pytest.mark.parametrize(
     "argv",
     [
-        ("--section-list",),
+        ("--sections-list",),
         ("--section-start", "2"),
         ("--ipa",),
         ("--analyze",),

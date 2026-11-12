@@ -78,8 +78,9 @@ Extras disponibles:
 | `zh` | Solo chino mandarín |
 | `dev` | pytest, ruff |
 
-Tras la instalación, el comando `bts` estará disponible en el entorno virtual.
-Para usarlo sin activar el entorno: `.venv/bin/bts`.
+Tras la instalación, los comandos `bts` y `bts-tts` estarán disponibles en el
+entorno virtual. Si otro programa ya usa `bts`, usa `bts-tts` para BTS. También
+puedes ejecutarlo sin activar el entorno: `.venv/bin/bts-tts`.
 
 ---
 
@@ -109,12 +110,12 @@ sesión actual:
 
 ```bash
 source .venv/bin/activate
-eval "$(register-python-argcomplete bts)"
+eval "$(register-python-argcomplete bts-tts)"
 ```
 
 Para tenerlo disponible en cada terminal, añade esas dos líneas a `~/.bashrc`;
-en ese caso, usa la ruta absoluta al entorno virtual. El autocompletado incluye
-opciones, idiomas, voces y subcomandos del daemon.
+en ese caso, usa la ruta absoluta al entorno virtual. Completa `bts-tts` con
+Tab; ofrece opciones, idiomas, voces y subcomandos del daemon.
 
 ### Control del daemon
 

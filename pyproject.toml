@@ -34,6 +34,7 @@ dev = ["pytest>=8", "ruff"]
 
 [project.scripts]
 bts = "bts.cli:main"
+bts-tts = "bts.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

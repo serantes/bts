@@ -845,7 +845,7 @@ class BTSDaemon:
                     lang_code=lang,
                     voice=voice,
                     output_arg=output,
-                    section_list=False,
+                    sections_list=False,
                     section_start=section_start,
                     display=False,  # Karaoke requires a foreground process
                     speed=speed,

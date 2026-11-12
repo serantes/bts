@@ -46,6 +46,9 @@ bts --epub libro.epub --analyze --ipa        # build a pronunciation dictionary
 bts --help
 ```
 
+If another program already uses the `bts` command name, BTS is also available
+as `bts-tts`.
+
 ## Pronunciation dictionary
 
 Lines are `word|replacement`. If the replacement is IPA phonemes in brackets,
