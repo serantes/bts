@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bts"
-version = "0.1.0"
+version = "0.2.0"
 description = "BTS - Book To Speech: local neural text-to-speech (Kokoro-82M) for text, text files and EPUB books"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"

@@ -6,10 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [0.1.0] – Unreleased
+## [Unreleased]
 
-Initial public release. The project was reorganised from a single-file script
-into a properly packaged Python application.
+## [0.2.0] – 2026-11-12
+
+This release adds daemon task management, configurable text pauses, and
+automatic device selection to the packaged Python application.
 
 ### Added
 
