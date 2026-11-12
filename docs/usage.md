@@ -102,6 +102,20 @@ bts --epub libro.epub --output --format mp3
 bts --help
 ```
 
+### Autocompletado en Bash
+
+Con el entorno virtual activado, carga la integración de `argcomplete` en la
+sesión actual:
+
+```bash
+source .venv/bin/activate
+eval "$(register-python-argcomplete bts)"
+```
+
+Para tenerlo disponible en cada terminal, añade esas dos líneas a `~/.bashrc`;
+en ese caso, usa la ruta absoluta al entorno virtual. El autocompletado incluye
+opciones, idiomas, voces y subcomandos del daemon.
+
 ### Control del daemon
 
 Las solicitudes de síntesis enviadas al daemon se procesan en orden. Mientras

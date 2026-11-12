@@ -20,6 +20,15 @@ def test_parser_defaults():
     assert args.max_pause == cli.DEFAULT_MAX_PAUSE_SECONDS
 
 
+def test_parser_configures_completion_values():
+    parser = cli.build_parser()
+    actions = parser._option_string_actions
+    assert actions["--voice"].completer is not None
+    assert actions["--ipa"].completer is not None
+    assert actions["--list-voices"].completer is not None
+    assert actions["--test"].completer is not None
+
+
 def test_parser_max_pause_accepts_zero_and_custom_value():
     assert parse("--max-pause", "0").max_pause == 0
     assert parse("--max-pause", "0.25").max_pause == 0.25

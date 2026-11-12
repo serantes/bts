@@ -57,6 +57,9 @@ import os
 import select
 import sys
 
+import argcomplete
+from argcomplete.completers import ChoicesCompleter
+
 from bts.analysis import run_analysis
 from bts.audio import require_ffplay, require_mp3_encoder
 from bts.constants import (
@@ -70,6 +73,7 @@ from bts.dictionary import PronunciationDictionary, load_dictionary
 from bts.epub import process_epub_book
 from bts.errors import GpuMemoryError, TTSError
 from bts.languages import (
+    KNOWN_VOICES,
     SUPPORTED_LANGUAGES,
     show_languages,
     show_voices,
@@ -172,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(SUPPORTED_LANGUAGES),
         help="Language code. Default: 'es'.",
     )
-    parser.add_argument(
+    voice_action = parser.add_argument(
         "--voice",
         default=None,
         help=(
@@ -180,6 +184,7 @@ def build_parser() -> argparse.ArgumentParser:
             "voice for the selected language."
         ),
     )
+    voice_action.completer = ChoicesCompleter(sorted(KNOWN_VOICES))
     parser.add_argument(
         "--speed",
         type=positive_float,
@@ -305,7 +310,7 @@ def build_parser() -> argparse.ArgumentParser:
             "file already exists."
         ),
     )
-    parser.add_argument(
+    ipa_action = parser.add_argument(
         "--ipa",
         nargs="?",
         const="",
@@ -320,6 +325,7 @@ def build_parser() -> argparse.ArgumentParser:
             "names in a Spanish book: --lang es --ipa us)."
         ),
     )
+    ipa_action.completer = ChoicesCompleter(sorted(SUPPORTED_LANGUAGES))
     parser.add_argument(
         "--section-list",
         action="store_true",
@@ -338,7 +344,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Display all supported ISO language codes and exit.",
     )
-    parser.add_argument(
+    list_voices_action = parser.add_argument(
         "--list-voices",
         nargs="?",
         const="all",
@@ -348,7 +354,10 @@ def build_parser() -> argparse.ArgumentParser:
             "to filter."
         ),
     )
-    parser.add_argument(
+    list_voices_action.completer = ChoicesCompleter(
+        sorted(SUPPORTED_LANGUAGES)
+    )
+    test_action = parser.add_argument(
         "--test",
         metavar="LANG",
         help=(
@@ -356,6 +365,7 @@ def build_parser() -> argparse.ArgumentParser:
             "using preset presentation text."
         ),
     )
+    test_action.completer = ChoicesCompleter(sorted(SUPPORTED_LANGUAGES))
     parser.add_argument(
         "--no-daemon",
         action="store_true",
@@ -372,22 +382,9 @@ def build_parser() -> argparse.ArgumentParser:
 # Daemon management
 # ---------------------------------------------------------------------------
 
-def _handle_daemon_command(argv: list[str]) -> int:
-    """Parse and execute ``bts daemon <action>`` subcommands.
-
-    Args:
-        argv: Everything after ``bts daemon`` on the command line.
-
-    Returns:
-        Process exit status.
-    """
-    import argparse as _ap
-
-    p = _ap.ArgumentParser(
-        prog="bts daemon",
-        description="Manage the BTS background daemon.",
-    )
-    sub = p.add_subparsers(dest="action")
+def _add_daemon_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add daemon actions to a parser."""
+    sub = parser.add_subparsers(dest="action")
 
     start_p = sub.add_parser(
         "start", help="Start the daemon."
@@ -430,6 +427,45 @@ def _handle_daemon_command(argv: list[str]) -> int:
     sub.add_parser("resume", help="Resume a paused conversion.")
     sub.add_parser("help", help="Show daemon command help.")
 
+
+def _daemon_completion_parser() -> argparse.ArgumentParser:
+    """Build the parser tree argcomplete needs for ``bts daemon``."""
+    parser = argparse.ArgumentParser(prog="bts")
+    commands = parser.add_subparsers(dest="command")
+    daemon = commands.add_parser(
+        "daemon",
+        description="Manage the BTS background daemon.",
+    )
+    _add_daemon_arguments(daemon)
+    return parser
+
+
+def _is_daemon_completion() -> bool:
+    """Return whether argcomplete is handling a daemon command line."""
+    if not os.environ.get("_ARGCOMPLETE"):
+        return False
+    words = os.environ.get("COMP_LINE", "").split(maxsplit=2)
+    return (
+        len(words) > 1
+        and os.path.basename(words[0]) == "bts"
+        and "daemon".startswith(words[1])
+    )
+
+
+def _handle_daemon_command(argv: list[str]) -> int:
+    """Parse and execute ``bts daemon <action>`` subcommands.
+
+    Args:
+        argv: Everything after ``bts daemon`` on the command line.
+
+    Returns:
+        Process exit status.
+    """
+    p = argparse.ArgumentParser(
+        prog="bts daemon",
+        description="Manage the BTS background daemon.",
+    )
+    _add_daemon_arguments(p)
     parsed = p.parse_args(argv)
     if parsed.action is None:
         p.print_help()
@@ -950,7 +986,12 @@ def main(argv: list | None = None) -> int:
     if _argv and _argv[0] == "daemon":
         return _handle_daemon_command(_argv[1:])
 
-    parser = build_parser()
+    parser = (
+        _daemon_completion_parser()
+        if _is_daemon_completion()
+        else build_parser()
+    )
+    argcomplete.autocomplete(parser)
     args = parser.parse_args(_argv)
     try:
         return run(args, parser)
