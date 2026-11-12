@@ -6,10 +6,16 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from typing import Callable
 
-from bts.constants import DEFAULT_MP3_QUALITY, MIN_SECTION_CHARS
+from bts.constants import (
+    DEFAULT_MAX_PAUSE_SECONDS,
+    DEFAULT_MP3_QUALITY,
+    MIN_SECTION_CHARS,
+)
 from bts.dictionary import PronunciationDictionary
 from bts.errors import GpuMemoryError, PlayerNotFoundError, TTSError
+from bts.numbers import prepare_text
 from bts.synthesis import synthesize_and_play, synthesize_epub_section_to_file
 
 # Optional imports for EPUB processing.
@@ -219,6 +225,8 @@ def stream_sections(
     speed: float,
     device: str,
     lexicon: PronunciationDictionary,
+    checkpoint: Callable[[], None] | None = None,
+    max_pause_seconds: float = DEFAULT_MAX_PAUSE_SECONDS,
 ) -> int:
     """Read sections aloud, one after another.
 
@@ -241,10 +249,15 @@ def stream_sections(
     """
     failed = 0
     for sec in sections:
+        if checkpoint is not None:
+            checkpoint()
         print(f"[{sec.index}/{total}] Reading section: {sec.title}")
         try:
-            title = lexicon.apply(sec.title) if sec.has_heading else ""
-            body = lexicon.apply(get_section_body(sec))
+            title = (
+                prepare_text(sec.title, lang_code, lexicon)
+                if sec.has_heading else ""
+            )
+            body = prepare_text(get_section_body(sec), lang_code, lexicon)
             if title or body:
                 synthesize_and_play(
                     body,
@@ -254,6 +267,8 @@ def stream_sections(
                     speed=speed,
                     device=device,
                     title=title,
+                    checkpoint=checkpoint,
+                    max_pause_seconds=max_pause_seconds,
                 )
         except (PlayerNotFoundError, GpuMemoryError):
             raise
@@ -277,6 +292,8 @@ def export_sections(
     audio_format: str,
     mp3_quality: int,
     lexicon: PronunciationDictionary,
+    checkpoint: Callable[[], None] | None = None,
+    max_pause_seconds: float = DEFAULT_MAX_PAUSE_SECONDS,
 ) -> int:
     """Export sections to numbered audio files, skipping finished ones.
 
@@ -301,6 +318,8 @@ def export_sections(
     """
     done = skipped = failed = 0
     for sec in sections:
+        if checkpoint is not None:
+            checkpoint()
         name = sanitize_filename(sec.title)
         filename = f"{sec.index:02d}_{name}.{audio_format}"
         output_filepath = os.path.join(output_dir, filename)
@@ -325,8 +344,9 @@ def export_sections(
         print(f"[{sec.index}/{total}] Synthesizing section: {filename}")
         try:
             synthesize_epub_section_to_file(
-                lexicon.apply(sec.title) if sec.has_heading else "",
-                lexicon.apply(body),
+                prepare_text(sec.title, lang_code, lexicon)
+                if sec.has_heading else "",
+                prepare_text(body, lang_code, lexicon),
                 output_filepath,
                 lang_code=lang_code,
                 voice=voice,
@@ -334,6 +354,8 @@ def export_sections(
                 device=device,
                 audio_format=audio_format,
                 mp3_quality=mp3_quality,
+                checkpoint=checkpoint,
+                max_pause_seconds=max_pause_seconds,
             )
         except GpuMemoryError:
             raise
@@ -367,6 +389,8 @@ def process_epub_book(
     audio_format: str = "flac",
     mp3_quality: int = DEFAULT_MP3_QUALITY,
     lexicon: PronunciationDictionary | None = None,
+    checkpoint: Callable[[], None] | None = None,
+    max_pause_seconds: float = DEFAULT_MAX_PAUSE_SECONDS,
 ) -> int:
     """List, read aloud or export the sections of an EPUB book.
 
@@ -415,7 +439,7 @@ def process_epub_book(
         )
         failed = stream_sections(
             selected, total, lang_code, voice, display, speed, device,
-            lexicon,
+            lexicon, checkpoint, max_pause_seconds,
         )
         print("\n[EPUB] Streaming complete.")
         return failed
@@ -438,5 +462,5 @@ def process_epub_book(
     )
     return export_sections(
         selected, total, output_dir, lang_code, voice, speed, device,
-        audio_format, mp3_quality, lexicon,
+        audio_format, mp3_quality, lexicon, checkpoint, max_pause_seconds,
     )

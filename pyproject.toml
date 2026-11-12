@@ -21,6 +21,7 @@ dependencies = [
     "torch",
     "ebooklib",
     "beautifulsoup4",
+    "num2words>=0.5",
 ]
 
 [project.optional-dependencies]

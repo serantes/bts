@@ -21,6 +21,46 @@ def test_generate_speech_plain(fake_pipeline):
     assert fake_pipeline.calls == [("hola", "ef_dora", 1.0)]
 
 
+def test_generate_speech_ignores_configured_strings(fake_pipeline):
+    list(
+        synthesis.generate_speech(
+            fake_pipeline, "e", "ho\u2060la", "ef_dora", 1.0
+        )
+    )
+    assert fake_pipeline.calls[0][0] == "hola"
+
+
+def test_em_dash_inserts_half_second_silence(fake_pipeline):
+    out = list(
+        synthesis.generate_speech(
+            fake_pipeline, "e", "hola — adios", "ef_dora", 1.0
+        )
+    )
+
+    assert [graphemes for graphemes, _ in out] == ["hola ", "", " adios"]
+    silence = out[1][1]
+    assert len(silence) == constants.SAMPLE_RATE // 2
+    assert not silence.any()
+    assert [call[0] for call in fake_pipeline.calls] == ["hola ", " adios"]
+
+
+def test_consecutive_pause_markers_use_one_capped_pause(fake_pipeline):
+    out = list(
+        synthesis.generate_speech(
+            fake_pipeline,
+            "e",
+            "hola — — adios",
+            "ef_dora",
+            1.0,
+            max_pause_seconds=0.25,
+        )
+    )
+
+    assert [graphemes for graphemes, _ in out] == ["hola ", "", " adios"]
+    assert len(out[1][1]) == constants.SAMPLE_RATE // 4
+    assert not out[1][1].any()
+
+
 def test_generate_speech_english_passes_markup_through(fake_pipeline):
     text = "say [mr](/mˈɪ/) now"
     list(synthesis.generate_speech(fake_pipeline, "a", text, "af_heart", 1.0))
@@ -56,10 +96,14 @@ def test_generate_speech_falls_back_without_generate_from_tokens(
     assert "cannot synthesize phonemes" in capsys.readouterr().err
 
 
-def test_chunk_phonemes_too_long_returns_none(fake_pipeline, capsys):
+def test_chunk_phonemes_too_long_is_split_before_generation(fake_pipeline):
     chunk = "[a](/" + "x" * (constants.MAX_PHONEMES + 1) + "/)"
-    assert phonemes.chunk_phonemes(fake_pipeline, chunk) is None
-    assert "too long" in capsys.readouterr().err
+    list(synthesis.generate_speech(fake_pipeline, "e", chunk, "v", 1.0))
+
+    generated = [call[0] for call in fake_pipeline.token_calls]
+    assert len(generated) == 2
+    assert all(len(part) <= constants.MAX_PHONEMES for part in generated)
+    assert "".join(generated) == "x" * (constants.MAX_PHONEMES + 1)
 
 
 def test_chunk_phonemes_g2p_failure_returns_none(fake_pipeline, capsys):
@@ -125,6 +169,20 @@ def test_play_wraps_generic_errors(monkeypatch, use_pipeline, fake_player):
         synthesis.synthesize_and_play("x", lang_code="es")
 
 
+def test_play_checkpoint_cancellation_is_not_wrapped(
+    monkeypatch, use_pipeline, fake_player
+):
+    monkeypatch.setattr(synthesis, "AudioPlayer", fake_player)
+
+    def cancel():
+        raise synthesis.SynthesisCancelled
+
+    with pytest.raises(synthesis.SynthesisCancelled):
+        synthesis.synthesize_and_play(
+            "hola", lang_code="es", checkpoint=cancel
+        )
+
+
 def test_play_translates_cuda_oom(monkeypatch, use_pipeline, fake_player):
     class Boom(fake_player):
         def write(self, samples):
@@ -186,6 +244,19 @@ def test_export_section_failure_removes_temp(
     path = str(tmp_path / "s.flac")
     with pytest.raises(errors.TTSError, match="bad"):
         synthesis.synthesize_epub_section_to_file("", "text", path)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_export_cancellation_removes_temp(use_pipeline, tmp_path):
+    path = str(tmp_path / "s.flac")
+
+    def cancel():
+        raise synthesis.SynthesisCancelled
+
+    with pytest.raises(synthesis.SynthesisCancelled):
+        synthesis.synthesize_epub_section_to_file(
+            "", "text", path, checkpoint=cancel
+        )
     assert list(tmp_path.iterdir()) == []
 
 

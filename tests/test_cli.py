@@ -14,9 +14,21 @@ def parse(*argv):
 
 def test_parser_defaults():
     args = parse()
-    assert args.lang == "es" and args.speed == 1.0 and args.device == "cpu"
+    assert args.lang == "es" and args.speed == 1.0 and args.device == "auto"
     assert args.output is None and args.format is None
     assert args.mp3_quality == cli.DEFAULT_MP3_QUALITY
+    assert args.max_pause == cli.DEFAULT_MAX_PAUSE_SECONDS
+
+
+def test_parser_max_pause_accepts_zero_and_custom_value():
+    assert parse("--max-pause", "0").max_pause == 0
+    assert parse("--max-pause", "0.25").max_pause == 0.25
+
+
+@pytest.mark.parametrize("value", ["-0.1", "nan", "inf", "abc"])
+def test_parser_max_pause_rejects_invalid_values(value):
+    with pytest.raises(SystemExit):
+        parse("--max-pause", value)
 
 
 def test_parser_output_without_value():
@@ -99,7 +111,15 @@ def test_run_analyze_with_ipa_lang_dispatches(monkeypatch):
 
 @pytest.fixture
 def spy(monkeypatch):
-    """Replace every heavy action with a recorder."""
+    """Replace every heavy action with a recorder.
+
+    Also stubs ``try_daemon_request`` to always return ``None`` so the tests
+    are independent of whether a BTS daemon happens to be running in the
+    background.  Without this stub the CLI would delegate to the daemon and
+    bypass the monkeypatched synthesis functions, causing KeyError failures.
+    """
+    import bts.client as _client
+
     calls = {}
     monkeypatch.setattr(cli, "prepare_synthesis", lambda args, **kw: "cpu")
     monkeypatch.setattr(
@@ -114,6 +134,8 @@ def spy(monkeypatch):
     monkeypatch.setattr(
         cli, "process_epub_book", lambda **kw: calls.update(epub=kw) or 0
     )
+    # Prevent delegation to a live daemon so the stubs above are always reached.
+    monkeypatch.setattr(_client, "try_daemon_request", lambda req: None)
     return calls
 
 
@@ -123,9 +145,12 @@ def run(*argv):
 
 
 def test_run_plain_text_plays(spy):
-    assert run("hola", "--speed", "1.2", "--lang", "us") == 0
+    assert run(
+        "hola", "--speed", "1.2", "--lang", "us", "--max-pause", "0.2"
+    ) == 0
     text, kw = spy["play"]
     assert text == "hola" and kw["speed"] == 1.2 and kw["lang_code"] == "us"
+    assert kw["max_pause_seconds"] == 0.2
 
 
 def test_run_text_applies_dictionary(spy, tmp_path):
@@ -199,12 +224,36 @@ def test_stdin_has_data_with_real_pipe(monkeypatch):
 def test_run_epub_passes_options(spy):
     run(
         "--epub", "b.epub", "--section-start", "3", "--format", "mp3",
-        "--output", "out", "--speed", "0.9",
+        "--output", "out", "--speed", "0.9", "--max-pause", "0.25",
     )
     kw = spy["epub"]
     assert kw["epub_path"] == "b.epub" and kw["section_start"] == "3"
     assert kw["audio_format"] == "mp3" and kw["output_arg"] == "out"
     assert kw["speed"] == 0.9
+    assert kw["max_pause_seconds"] == 0.25
+
+
+@pytest.mark.parametrize(
+    ("argv", "action"),
+    [
+        (("hola",), "play"),
+        (("hola", "--output", "out.flac"), "save"),
+        (("--epub", "b.epub"), "epub"),
+    ],
+)
+def test_daemon_requests_include_max_pause(monkeypatch, argv, action):
+    import bts.client
+
+    requests = []
+    monkeypatch.setattr(
+        bts.client,
+        "try_daemon_request",
+        lambda request: requests.append(request) or 0,
+    )
+
+    assert run(*argv, "--max-pause", "0.25") == 0
+    assert requests[0]["action"] == action
+    assert requests[0]["max_pause"] == 0.25
 
 
 def test_run_epub_failures_give_status_1(monkeypatch, spy):

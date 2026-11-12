@@ -10,10 +10,26 @@ SAMPLE_RATE = 24000  # Output sample rate of Kokoro-82M, in Hz.
 REPO_ID = "hexgrad/Kokoro-82M"
 
 
+# Strings removed from text before it is prepared or synthesized.
+IGNORED_STRINGS = ["\u2060"]
+
+
 TITLE_SPEED = 0.8  # Section titles are read slower than the body text.
 
 
 TITLE_PAUSE_SECONDS = 0.8  # Silence between a section title and its body.
+
+
+# Maximum silence duration in seconds for text pause markers.
+DEFAULT_MAX_PAUSE_SECONDS = 0.5
+
+
+# Literal text markers and their requested silence duration in seconds.
+PAUSE_MARKERS = {
+    "—": DEFAULT_MAX_PAUSE_SECONDS,
+    "!": DEFAULT_MAX_PAUSE_SECONDS,
+    "?": DEFAULT_MAX_PAUSE_SECONDS,
+}
 
 
 MIN_SECTION_CHARS = 10  # Shorter sections are considered empty.
