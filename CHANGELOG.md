@@ -8,6 +8,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `--dictionary FILE --display` to listen to and interactively review dictionary
+  entries without karaoke highlighting, using single-key controls and a save
+  prompt on completion or abort. Edits and the resume point are persisted only
+  when saving is confirmed.
+
 ## [0.2.0] – 2026-11-12
 
 This release adds daemon task management, configurable text pauses, and

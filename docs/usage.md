@@ -363,7 +363,18 @@ bts --epub MiLibro.epub --analyze --ipa
 
 # Paso 3: leer el libro usando el diccionario
 bts --epub MiLibro.epub --dictionary MiLibro.dict
+
+# Repasar el diccionario línea por línea
+bts --dictionary MiLibro.dict --display
 ```
+
+Durante el repaso se muestra y pronuncia cada línea, sin resaltado. Pulsa
+`Y` para eliminarla, `N` para conservarla, `R` para repetirla o `A` para
+abortar; no hace falta pulsar Intro. Al terminar se pregunta si guardar los
+cambios. Si se aborta, el progreso y la marca de la entrada pendiente se
+guardan solo si se confirma esa pregunta; al responder que no, el fichero
+queda intacto. Los cambios se mantienen temporalmente hasta confirmar que se
+guarden.
 
 **Opciones del análisis:**
 ```bash

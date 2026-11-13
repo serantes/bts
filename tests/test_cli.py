@@ -83,6 +83,12 @@ def test_parser_tracks_explicit_build_overrides():
     assert args.dictionary_explicit
 
 
+def test_dictionary_display_enables_dictionary_review():
+    args = parse("--dictionary", "words.dict", "--display")
+    assert args.dictionary == "words.dict"
+    assert args.dictionary_explicit
+
+
 @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "abc"])
 def test_positive_float_rejects(value):
     with pytest.raises(SystemExit):
@@ -195,6 +201,25 @@ def test_run_text_applies_dictionary(spy, tmp_path):
     dictionary.write_text("hola|adios\n", encoding="utf-8")
     run("hola mundo", "--dictionary", str(dictionary))
     assert spy["play"][0] == "adios mundo"
+
+
+def test_dictionary_display_runs_interactive_dictionary_review(
+    monkeypatch, tmp_path
+):
+    dictionary = tmp_path / "words.dict"
+    dictionary.write_text("hola|adios\n", encoding="utf-8")
+    captured = {}
+    monkeypatch.setattr(cli, "prepare_synthesis", lambda *a, **kw: "cpu")
+
+    def review(path, **kwargs):
+        captured["path"] = path
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("bts.review.review_dictionary", review)
+    assert run("--dictionary", str(dictionary), "--display") == 0
+    assert captured["path"] == str(dictionary)
+    assert captured["device"] == "cpu"
 
 
 def test_run_txt_to_file_defaults_to_txt_name(spy, tmp_path):

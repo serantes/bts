@@ -850,6 +850,40 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.dictionary and not os.path.splitext(args.dictionary)[1]:
         args.dictionary += ".dict"
 
+    if args.dictionary_explicit and args.display:
+        if (
+            args.epub
+            or args.text_file
+            or args.clipboard
+            or args.text is not None
+            or args.output is not None
+            or args.format is not None
+            or args.analyze
+            or args.ipa is not None
+            or args.project is not None
+            or args.build is not None
+            or args.sections_list
+            or args.section_start is not None
+        ):
+            parser.error(
+                "--dictionary --display reviews the dictionary and cannot be "
+                "combined with text, source, analysis, project, or output "
+                "options."
+            )
+        from bts.review import review_dictionary
+
+        device = prepare_synthesis(
+            args, needs_player=True, lang_code=args.lang
+        )
+        return review_dictionary(
+            args.dictionary,
+            lang_code=args.lang,
+            voice=args.voice,
+            speed=args.speed,
+            device=device,
+            max_pause_seconds=args.max_pause,
+        )
+
     if args.project is not None:
         if not (args.epub or args.text_file):
             parser.error("--project requires --epub or --text.")
