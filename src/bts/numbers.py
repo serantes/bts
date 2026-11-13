@@ -49,7 +49,7 @@ from __future__ import annotations
 import re
 from decimal import Decimal, InvalidOperation
 
-from bts.constants import IGNORED_STRINGS
+from bts.settings import current_settings
 
 # ---------------------------------------------------------------------------
 # Language mapping: BTS ISO code → num2words lang code, or None to skip.
@@ -318,6 +318,6 @@ def prepare_text(
 
 def remove_ignored_strings(text: str) -> str:
     """Remove configured strings that must be treated as absent."""
-    for ignored in IGNORED_STRINGS:
+    for ignored in current_settings().ignored_strings:
         text = text.replace(ignored, "")
     return text

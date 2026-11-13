@@ -51,6 +51,7 @@ from pathlib import Path
 
 from bts.constants import DEFAULT_MAX_PAUSE_SECONDS, DEFAULT_MP3_QUALITY
 from bts.numbers import prepare_text
+from bts.settings import use_settings
 from bts.synthesis import SynthesisCancelled
 
 # ---------------------------------------------------------------------------
@@ -661,7 +662,8 @@ class BTSDaemon:
                 self._cancel_current.clear()
             try:
                 self._checkpoint()
-                with self._capture_stdout(conn):
+                with use_settings(request.get("settings", {})), \
+                        self._capture_stdout(conn):
                     if action == "play":
                         self._handle_play(request, conn)
                     elif action == "save":

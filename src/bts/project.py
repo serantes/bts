@@ -441,6 +441,10 @@ def build_project(
     voice_override: str | None = None,
     format_override: str | None = None,
     dictionary_override: str | None = None,
+    default_language: str = "es",
+    default_voice: str | None = None,
+    default_format: str = "flac",
+    default_dictionary: str | None = None,
     dictionary_ignore_case: bool = False,
     speed: float = 1.0,
     device: str = "auto",
@@ -463,7 +467,7 @@ def build_project(
         return 0
 
     project_language, language_is_configured = _read_setting(
-        config, "Language", "es"
+        config, "Language", default_language
     )
     language = _override_value(
         "--lang",
@@ -476,14 +480,14 @@ def build_project(
         raise TTSError(f"Unsupported project language '{language}'.")
 
     project_voice, voice_is_configured = _read_setting(
-        config, "Voice", None
+        config, "Voice", default_voice
     )
     voice = _override_value(
         "--voice", project_voice, voice_is_configured, voice_override
     )
 
     project_format, format_is_configured = _read_setting(
-        config, "OutputFormat", "flac"
+        config, "OutputFormat", default_format
     )
     audio_format = _override_value(
         "--format",
@@ -498,7 +502,9 @@ def build_project(
         )
 
     source_path = Path(source_file)
-    default_dictionary = str(source_path.with_suffix(".dict"))
+    default_dictionary = (
+        default_dictionary or str(source_path.with_suffix(".dict"))
+    )
     project_dictionary, dictionary_is_configured = _read_setting(
         config, "Dictionary", default_dictionary
     )

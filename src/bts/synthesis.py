@@ -21,12 +21,8 @@ from bts.constants import (
     DEFAULT_MAX_PAUSE_SECONDS,
     DEFAULT_MP3_QUALITY,
     ENGLISH_LANG_CODES,
-    PAUSE_MARKERS,
-    PHONEME_CHUNK_CHARS,
     PHONEME_MARKUP_RE,
     SAMPLE_RATE,
-    TITLE_PAUSE_SECONDS,
-    TITLE_SPEED,
 )
 from bts.device import get_pipeline, get_torch, gpu_oom_message, is_cuda_oom
 from bts.errors import GpuMemoryError, PlayerNotFoundError, TTSError, warn_once
@@ -39,18 +35,11 @@ from bts.languages import (
 )
 from bts.numbers import remove_ignored_strings
 from bts.phonemes import _split_phonemes, chunk_phonemes, strip_phoneme_markup
+from bts.settings import current_settings
 from bts.textio import split_into_chunks
 
 if TYPE_CHECKING:
     from kokoro import KPipeline
-
-
-_PAUSE_MARKER_RE = re.compile(
-    "|".join(
-        re.escape(marker)
-        for marker in sorted(PAUSE_MARKERS, key=len, reverse=True)
-    )
-)
 
 
 class SynthesisCancelled(Exception):
@@ -86,7 +75,9 @@ def _generate_with_phonemes(
     for line in re.split(r"\n+", text):
         if not line.strip():
             continue
-        for chunk in split_into_chunks(line, PHONEME_CHUNK_CHARS):
+        for chunk in split_into_chunks(
+            line, current_settings().phoneme_chunk_chars
+        ):
             phonemes = None
             if can_inject and PHONEME_MARKUP_RE.search(chunk):
                 phonemes = chunk_phonemes(pipeline, chunk)
@@ -136,8 +127,7 @@ def generate_speech(
 ):
     """Generate speech and insert silence for configured text markers.
 
-    Literal markers and their pause durations are configured in
-    ``bts.constants.PAUSE_MARKERS`` and capped by ``max_pause_seconds``.
+    Literal markers and their durations are capped by ``max_pause_seconds``.
     Consecutive markers separated only by whitespace become one pause. The
     markers themselves are not spoken.
     """
@@ -145,7 +135,11 @@ def generate_speech(
         raise ValueError("max_pause_seconds must be finite and non-negative")
 
     text = remove_ignored_strings(text)
-    matches = list(_PAUSE_MARKER_RE.finditer(text))
+    markers = current_settings().pause_markers
+    marker_re = re.compile("|".join(
+        re.escape(marker) for marker in sorted(markers, key=len, reverse=True)
+    )) if markers else None
+    matches = list(marker_re.finditer(text)) if marker_re else []
     position = 0
     index = 0
     while index < len(matches):
@@ -165,7 +159,7 @@ def generate_speech(
         ):
             end_index += 1
         marker_pause = max(
-            PAUSE_MARKERS[item.group()]
+            markers[item.group()]
             for item in matches[index:end_index]
         )
         pause_seconds = min(marker_pause, max_pause_seconds)
@@ -193,7 +187,7 @@ def synthesize_and_play(
     title: str = "",
     checkpoint: Callable[[], None] | None = None,
     max_pause_seconds: float = DEFAULT_MAX_PAUSE_SECONDS,
-    title_speed_factor: float = TITLE_SPEED,
+    title_speed_factor: float | None = None,
 ) -> None:
     """Generate speech from text and stream it to ``ffplay``.
 
@@ -223,6 +217,8 @@ def synthesize_and_play(
     selected_voice = voice or get_default_voice(lang_code)
     pipeline = get_pipeline(lang_info["internal"], device)
     internal = lang_info["internal"]
+    if title_speed_factor is None:
+        title_speed_factor = current_settings().title_speed
 
     def segments():
         if title:
@@ -232,7 +228,8 @@ def synthesize_and_play(
                 max_pause_seconds,
             )
             yield "", np.zeros(
-                int(SAMPLE_RATE * TITLE_PAUSE_SECONDS), dtype=np.float32
+                int(SAMPLE_RATE * current_settings().title_pause_seconds),
+                dtype=np.float32,
             )
         if text:
             yield from generate_speech(
@@ -324,7 +321,7 @@ def synthesize_epub_section_to_file(
                     lang_info["internal"],
                     title_text,
                     selected_voice,
-                    speed * TITLE_SPEED,
+                    speed * current_settings().title_speed,
                     max_pause_seconds,
                 ):
                     _checkpoint(checkpoint)
@@ -334,7 +331,10 @@ def synthesize_epub_section_to_file(
                         samples_written += len(samples)
                 out.write(
                     np.zeros(
-                        int(SAMPLE_RATE * TITLE_PAUSE_SECONDS),
+                        int(
+                            SAMPLE_RATE
+                            * current_settings().title_pause_seconds
+                        ),
                         dtype=np.float32,
                     )
                 )

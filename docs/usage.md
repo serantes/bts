@@ -159,6 +159,65 @@ números demasiado grandes en `move` equivalen a la última posición.
 bts [opciones] [texto]
 ```
 
+### Configuración por defecto
+
+BTS lee automáticamente `$XDG_CONFIG_HOME/btsrc`, si existe. Si
+`XDG_CONFIG_HOME` no está definido o no es una ruta absoluta, usa
+`~/.config/btsrc`. No crea ni modifica este fichero.
+
+```bash
+bts --cfg                         # configuración efectiva en YAML por stdout
+bts --cfg ajustes.yaml "Hola"     # ajustes adicionales para esta ejecución
+```
+
+`--cfg FICHERO` requiere un fichero existente y no lo modifica. La precedencia
+es: valores incorporados, `btsrc`, fichero de `--cfg` y opciones explícitas
+de la línea de comandos. `--cfg` sin fichero muestra los valores incorporados
+combinados con `btsrc` y termina. Se puede guardar esa salida manualmente
+y editarla. Los ficheros son mapas YAML; solo hay que incluir las claves que
+se desean cambiar:
+
+```yaml
+default_format: mp3
+device: auto
+dictionary: null
+dictionary_ignore_case: false
+display: false
+format: null
+gpu_min_free_mib: 1024
+ignored_strings: ["\u2060"]
+lang: es
+max_chunk_chars: 400
+max_pause: 0.5
+min_section_chars: 10
+mp3_quality: 4
+no_daemon: false
+pause_markers: {"—": 0.5, "!": 0.5, "?": 0.5}
+phoneme_chunk_chars: 300
+repo_id: hexgrad/Kokoro-82M
+speed: 1.0
+title_pause_seconds: 0.8
+title_speed: 0.8
+voice: null
+```
+
+Los valores se validan como las opciones de la línea de comandos. En los
+proyectos, los valores explícitos del proyecto prevalecen sobre los de
+configuración; las opciones explícitas de la línea de comandos prevalecen
+sobre ambos. `default_format` acepta `mp3` o `flac`; una extensión de salida
+reconocida o `--format` tienen prioridad. `pause_markers` sustituye el mapa
+completo de marcadores y admite `{}` para desactivarlos; su duración sigue
+limitada por `max_pause`. `ignored_strings` sustituye la lista completa.
+`repo_id` debe identificar un modelo compatible con Kokoro y su frecuencia
+nativa de 24 kHz. El daemon recibe los ajustes de cada solicitud; reinícialo
+tras actualizar BTS para que use esta versión del protocolo.
+
+`title_speed` multiplica la velocidad de lectura del título y
+`title_pause_seconds` determina el silencio posterior. `gpu_min_free_mib`
+fija la memoria libre mínima de la GPU; `min_section_chars`, el tamaño mínimo
+de una sección. `max_chunk_chars` y `phoneme_chunk_chars` establecen los
+tamaños orientativos de los fragmentos de texto ordinario y fonético.
+
 ### Texto de entrada
 
 | Opción | Descripción |
@@ -202,7 +261,7 @@ los del proyecto y se avisa cuando reemplazan un valor explícito del archivo.
 | Opción | Descripción |
 |---|---|
 | `--output [DIR\|FILE]` | Guarda el audio en lugar de reproducirlo. Con `--epub`: directorio (uno por sección). Sin valor: directorio con el nombre del libro. Para texto plano: nombre del fichero de salida. |
-| `--format flac\|mp3` | Formato del audio exportado. Si se omite, se deduce de la extensión o se usa FLAC. |
+| `--format flac\|mp3` | Formato del audio exportado. Si se omite, se deduce de la extensión o se usa `default_format` (MP3 por defecto). |
 | `--mp3-quality 0-9` | Calidad VBR del MP3 (0 = mejor/más grande, 9 = menor calidad/más compacto). Por defecto: `4`. |
 
 ### Diccionario de pronunciación

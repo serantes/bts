@@ -5,11 +5,12 @@ from __future__ import annotations
 import os
 import re
 
-from bts.constants import AUDIO_FORMATS, MAX_CHUNK_CHARS
+from bts.constants import AUDIO_FORMATS
 from bts.errors import TTSError
+from bts.settings import current_settings
 
 
-def split_into_chunks(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list:
+def split_into_chunks(text: str, max_chars: int | None = None) -> list:
     """Split text into chunks made of whole sentences.
 
     Sentences are merged until a chunk reaches ``max_chars``. A single
@@ -24,6 +25,8 @@ def split_into_chunks(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list:
     Returns:
         The list of non-empty chunks.
     """
+    if max_chars is None:
+        max_chars = current_settings().max_chunk_chars
     chunks: list = []
     for paragraph in re.split(r"\n+", text):
         current = ""
@@ -76,7 +79,7 @@ def resolve_audio_output(
     """Work out the path and the format of the audio file to create.
 
     If the name ends in ``.flac`` or ``.mp3``, the extension selects the
-    format. Otherwise the extension of ``--format`` (``flac`` by default)
+    format. Otherwise the extension of ``--format`` (``mp3`` by default)
     is added to the name.
 
     Args:
@@ -109,7 +112,7 @@ def resolve_audio_output(
             )
         audio_format, path = extension, name
     else:
-        audio_format = format_arg or "flac"
+        audio_format = format_arg or current_settings().default_format
         path = f"{name}.{audio_format}"
     if os.path.isdir(path):
         raise TTSError(f"'{path}' is a directory, not a file name.")

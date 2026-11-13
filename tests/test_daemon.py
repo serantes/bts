@@ -2,11 +2,14 @@
 
 import json
 import socket
+import threading
+from contextlib import nullcontext
 
 import pytest
 
 from bts import cli
 from bts.daemon import BTSDaemon
+from bts.settings import current_settings
 
 
 def dispatch(daemon, request):
@@ -110,6 +113,45 @@ def test_play_handler_resolves_auto_device(monkeypatch):
     finally:
         server.close()
         client.close()
+
+
+def test_worker_applies_and_resets_settings_per_request(monkeypatch):
+    daemon = BTSDaemon()
+    daemon._running = True
+    seen = []
+    done = threading.Event()
+    pairs = enqueue(
+        daemon,
+        {"action": "play", "text": "first", "settings": {
+            "repo_id": "custom/model", "title_speed": 0.4,
+        }},
+        {"action": "play", "text": "second"},
+    )
+
+    def handle(request, conn):
+        settings = current_settings()
+        seen.append((settings.repo_id, settings.title_speed))
+        if len(seen) == 2:
+            done.set()
+
+    monkeypatch.setattr(daemon, "_handle_play", handle)
+    monkeypatch.setattr(daemon, "_capture_stdout", lambda conn: nullcontext())
+    worker = threading.Thread(target=daemon._work_loop)
+    worker.start()
+    try:
+        assert done.wait(timeout=3)
+        assert seen == [
+            ("custom/model", 0.4), ("hexgrad/Kokoro-82M", 0.8),
+        ]
+    finally:
+        with daemon._queue_condition:
+            daemon._running = False
+            daemon._queue_condition.notify_all()
+        worker.join(timeout=3)
+        for server, client in pairs:
+            server.close()
+            client.close()
+    assert not worker.is_alive()
 
 
 def test_play_and_resume_only_resume_a_paused_conversion():

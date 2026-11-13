@@ -11,11 +11,11 @@ from typing import Callable
 from bts.constants import (
     DEFAULT_MAX_PAUSE_SECONDS,
     DEFAULT_MP3_QUALITY,
-    MIN_SECTION_CHARS,
 )
 from bts.dictionary import PronunciationDictionary
 from bts.errors import GpuMemoryError, PlayerNotFoundError, TTSError
 from bts.numbers import prepare_text
+from bts.settings import current_settings
 from bts.synthesis import synthesize_and_play, synthesize_epub_section_to_file
 
 # Optional imports for EPUB processing.
@@ -177,7 +177,7 @@ def get_section_body(section: Section) -> str:
         short to be worth reading.
     """
     full_text = get_plain_text(section.soup)
-    if len(full_text) < MIN_SECTION_CHARS:
+    if len(full_text) < current_settings().min_section_chars:
         return ""
     if section.has_heading and full_text.startswith(section.title):
         return full_text[len(section.title):].strip()

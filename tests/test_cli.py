@@ -4,9 +4,15 @@ import io
 import sys
 
 import pytest
+import yaml
 
 from bts import analysis, cli
 from bts.dictionary import PronunciationDictionary
+
+
+@pytest.fixture(autouse=True)
+def isolate_user_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
 
 def parse(*argv):
@@ -19,6 +25,166 @@ def test_parser_defaults():
     assert args.output is None and args.format is None
     assert args.mp3_quality == cli.DEFAULT_MP3_QUALITY
     assert args.max_pause == cli.DEFAULT_MAX_PAUSE_SECONDS
+
+
+def test_config_prints_effective_yaml_without_creating_file(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    assert cli.main(["--cfg"]) == 0
+    config = yaml.safe_load(capsys.readouterr().out)
+    assert config["lang"] == "es"
+    assert config["speed"] == 1.0
+    assert config["voice"] is None
+    assert config["default_format"] == "mp3"
+    assert "sample_rate" not in config
+    assert list(config) == sorted(config)
+    assert not (tmp_path / "btsrc").exists()
+
+
+def test_config_precedence_and_cli_overrides(tmp_path, monkeypatch, spy):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    local = tmp_path / "btsrc"
+    local.write_text("lang: fr\nspeed: 1.5\n", encoding="utf-8")
+    extra = tmp_path / "extra.yaml"
+    extra.write_text("lang: us\nspeed: 2\n", encoding="utf-8")
+
+    assert cli.main(["--cfg", str(extra), "--speed", "3", "hello"]) == 0
+    _, kwargs = spy["play"]
+    assert kwargs["lang_code"] == "us"
+    assert kwargs["speed"] == 3
+    assert local.read_text(encoding="utf-8") == "lang: fr\nspeed: 1.5\n"
+    assert cli.main(["hello"]) == 0
+    assert spy["play"][1]["lang_code"] == "fr"
+    assert spy["play"][1]["speed"] == 1.5
+
+
+def test_config_output_round_trips_and_uses_default_xdg_path(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", "relative")
+    config_dir = tmp_path / ".config"
+    config_dir.mkdir()
+    (config_dir / "btsrc").write_text("lang: US\n", encoding="utf-8")
+    assert cli.main(["--cfg"]) == 0
+    output = capsys.readouterr().out
+    assert yaml.safe_load(output)["lang"] == "us"
+    other = tmp_path / "other.yaml"
+    other.write_text(output, encoding="utf-8")
+    assert cli.main(["--cfg", str(other), "--list-languages"]) == 0
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "lang: xx", "speed: 0", "display: 'false'", "unknown: 1",
+        "mp3_quality: 10", "- not-a-mapping", "lang: [",
+        "title_speed: 0", "title_pause_seconds: -1", "ignored_strings: ['']",
+        "pause_markers: {'': 1}", "pause_markers: {'!': -.inf}",
+        "max_chunk_chars: 0", "phoneme_chunk_chars: true",
+        "gpu_min_free_mib: -1", "min_section_chars: -1",
+        "repo_id: ''", "default_format: wav", "sample_rate: 24000",
+    ],
+)
+def test_invalid_config_reports_error(tmp_path, monkeypatch, capsys, content):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    (tmp_path / "btsrc").write_text(content, encoding="utf-8")
+    assert cli.main(["--cfg"]) == 1
+    assert "Error:" in capsys.readouterr().err
+
+
+def test_config_missing_explicit_file_reports_error(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    assert cli.main(["--cfg", str(tmp_path / "missing")]) == 1
+    assert "missing" in capsys.readouterr().err
+
+
+def test_config_defaults_do_not_count_as_explicit_project_options(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    (tmp_path / "btsrc").write_text(
+        "lang: fr\nvoice: ff_siwis\nformat: mp3\ndictionary: words.dict\n",
+        encoding="utf-8",
+    )
+    captured = {}
+    monkeypatch.setattr(
+        cli, "build_project",
+        lambda name, **kwargs: captured.update(kwargs) or 0,
+    )
+    assert cli.main(["--build", "book"]) == 0
+    assert captured["language_override"] is None
+    assert captured["voice_override"] is None
+    assert captured["default_language"] == "fr"
+    assert captured["default_voice"] == "ff_siwis"
+    assert captured["default_format"] == "mp3"
+    assert captured["default_dictionary"] == "words.dict"
+    monkeypatch.setattr(
+        cli, "create_project", lambda *args, **kwargs: "book.bts"
+    )
+    assert cli.main(["--text", "book.txt", "--project"]) == 0
+
+
+def test_config_defaults_do_not_block_ipa(
+    tmp_path, monkeypatch, fake_pipeline, capsys
+):
+    (tmp_path / "btsrc").write_text(
+        "voice: ff_siwis\nformat: mp3\ndisplay: true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        analysis, "get_g2p_pipeline", lambda code: fake_pipeline
+    )
+    assert cli.main(["--ipa", "es", "Hola"]) == 0
+    assert capsys.readouterr().out == "Hola|[Hola](/HOLA/)\n"
+
+
+def test_config_runtime_options_are_sent_to_daemon(tmp_path, monkeypatch):
+    import bts.client
+
+    (tmp_path / "btsrc").write_text(
+        "repo_id: other/model\ntitle_speed: 0.6\n"
+        "ignored_strings: ['_']\npause_markers: {'!': 0.2}\n",
+        encoding="utf-8",
+    )
+    requests = []
+    monkeypatch.setattr(
+        bts.client, "try_daemon_request", lambda req: requests.append(req) or 0
+    )
+    assert cli.main(["hello"]) == 0
+    assert requests[0]["settings"]["repo_id"] == "other/model"
+    assert requests[0]["settings"]["title_speed"] == 0.6
+    assert requests[0]["settings"]["ignored_strings"] == ("_",)
+    assert requests[0]["settings"]["pause_markers"] == {"!": 0.2}
+
+
+def test_config_runtime_options_apply_only_to_current_invocation(
+    tmp_path, spy
+):
+    settings = tmp_path / "custom.yaml"
+    settings.write_text("ignored_strings: ['_']\n", encoding="utf-8")
+    assert cli.main(["--cfg", str(settings), "ho_la"]) == 0
+    assert spy["play"][0] == "hola"
+    assert cli.main(["ho_la"]) == 0
+    assert spy["play"][0] == "ho_la"
+
+
+def test_config_default_format_respects_extension_and_explicit_format(
+    tmp_path, spy
+):
+    (tmp_path / "btsrc").write_text("default_format: flac\n", encoding="utf-8")
+    assert cli.main(["hello", "--output", "audio"]) == 0
+    assert spy["file"][1] == "audio.flac"
+    assert spy["file"][2]["audio_format"] == "flac"
+    assert cli.main(["hello", "--output", "audio.mp3"]) == 0
+    assert spy["file"][2]["audio_format"] == "mp3"
+    assert cli.main(["hello", "--output", "audio", "--format", "mp3"]) == 0
+    assert spy["file"][1] == "audio.mp3"
+    assert cli.main(["--epub", "book.epub", "--output"]) == 0
+    assert spy["epub"]["audio_format"] == "flac"
 
 
 def test_parser_configures_completion_values():
@@ -287,8 +453,8 @@ def test_run_txt_to_file_defaults_to_txt_name(spy, tmp_path):
     source.write_text("hello", encoding="utf-8")
     run("--text", str(source), "--output")
     text, path, kw = spy["file"]
-    assert text == "hello" and path == "story.flac"
-    assert kw["audio_format"] == "flac"
+    assert text == "hello" and path == "story.mp3"
+    assert kw["audio_format"] == "mp3"
 
 
 def test_run_output_name_and_mp3(spy):

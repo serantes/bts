@@ -9,8 +9,8 @@ import sys
 import warnings
 from typing import TYPE_CHECKING
 
-from bts.constants import GPU_MIN_FREE_MIB, REPO_ID
 from bts.errors import GpuMemoryError, TTSError
+from bts.settings import current_settings
 
 if TYPE_CHECKING:
     from kokoro import KPipeline
@@ -90,7 +90,7 @@ def gpu_oom_message(
     if free_mib is not None and total_mib is not None:
         detail = (
             f" Only {free_mib} MiB are free out of {total_mib} MiB "
-            f"(at least {GPU_MIN_FREE_MIB} MiB are needed)."
+            f"(at least {current_settings().gpu_min_free_mib} MiB are needed)."
         )
     return (
         "The GPU does not have enough free memory to generate audio."
@@ -114,7 +114,7 @@ def gpu_has_room() -> tuple[bool, str]:
             return False, gpu_oom_message()
         return True, ""
     free_mib, total_mib = free // 2**20, total // 2**20
-    if free_mib < GPU_MIN_FREE_MIB:
+    if free_mib < current_settings().gpu_min_free_mib:
         return False, gpu_oom_message(free_mib, total_mib)
     return True, ""
 
@@ -152,7 +152,6 @@ def resolve_device(requested: str) -> str:
     raise GpuMemoryError(message)
 
 
-@functools.lru_cache(maxsize=None)
 def get_pipeline(internal_lang_code: str, device: str) -> KPipeline:
     """Return a Kokoro pipeline, loading the model only once per language.
 
@@ -169,10 +168,19 @@ def get_pipeline(internal_lang_code: str, device: str) -> KPipeline:
     Raises:
         GpuMemoryError: If the GPU runs out of memory while loading.
     """
+    return _get_pipeline(
+        internal_lang_code, device, current_settings().repo_id
+    )
+
+
+@functools.lru_cache(maxsize=None)
+def _get_pipeline(
+    internal_lang_code: str, device: str, repo_id: str
+) -> KPipeline:
     try:
         return get_kpipeline_class()(
             lang_code=internal_lang_code,
-            repo_id=REPO_ID,
+            repo_id=repo_id,
             device=device,
         )
     except Exception as exc:
@@ -181,7 +189,6 @@ def get_pipeline(internal_lang_code: str, device: str) -> KPipeline:
         raise
 
 
-@functools.lru_cache(maxsize=None)
 def get_g2p_pipeline(internal_lang_code: str) -> KPipeline:
     """Return a Kokoro pipeline that only converts text to phonemes.
 
@@ -191,11 +198,20 @@ def get_g2p_pipeline(internal_lang_code: str) -> KPipeline:
     Raises:
         TTSError: If the phonemizer of the language cannot be created.
     """
+    return _get_g2p_pipeline(internal_lang_code, current_settings().repo_id)
+
+
+@functools.lru_cache(maxsize=None)
+def _get_g2p_pipeline(internal_lang_code: str, repo_id: str) -> KPipeline:
     try:
         return get_kpipeline_class()(
-            lang_code=internal_lang_code, repo_id=REPO_ID, model=False
+            lang_code=internal_lang_code, repo_id=repo_id, model=False
         )
     except Exception as exc:
         raise TTSError(
             f"Cannot create the Kokoro phonemizer: {exc}"
         ) from exc
+
+
+get_pipeline.cache_clear = _get_pipeline.cache_clear
+get_g2p_pipeline.cache_clear = _get_g2p_pipeline.cache_clear

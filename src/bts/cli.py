@@ -57,8 +57,11 @@ import math
 import os
 import select
 import sys
+from dataclasses import asdict
+from pathlib import Path
 
 import argcomplete
+import yaml
 from argcomplete.completers import ChoicesCompleter
 
 from bts.analysis import add_phonemes, run_analysis
@@ -83,6 +86,12 @@ from bts.languages import (
 )
 from bts.numbers import prepare_text
 from bts.project import build_project, create_project
+from bts.settings import (
+    current_settings,
+    settings_values,
+    use_settings,
+    validate_setting,
+)
 from bts.synthesis import (
     run_voice_tests,
     synthesize_and_play,
@@ -125,6 +134,96 @@ class _StoreExplicit(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
         setattr(namespace, self.dest, values)
         setattr(namespace, f"{self.dest}_explicit", True)
+
+
+class _StoreExplicitTrue(argparse.Action):
+    """Store a boolean option and mark that the user supplied it."""
+
+    def __init__(self, option_strings, dest, **kwargs):
+        super().__init__(option_strings, dest, nargs=0, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, True)
+        setattr(namespace, f"{self.dest}_explicit", True)
+
+
+_CONFIG_OPTIONS = (
+    "device", "dictionary", "dictionary_ignore_case", "display", "format",
+    "lang", "max_pause", "mp3_quality", "no_daemon", "speed", "voice",
+)
+
+
+def _config_path() -> Path:
+    config_home = os.environ.get("XDG_CONFIG_HOME")
+    if config_home and os.path.isabs(config_home):
+        return Path(config_home) / "btsrc"
+    return Path.home() / ".config" / "btsrc"
+
+
+def _load_config(
+    path: Path, parser: argparse.ArgumentParser, *, optional: bool = False
+) -> dict:
+    try:
+        with path.open(encoding="utf-8") as config_file:
+            data = yaml.safe_load(config_file)
+    except FileNotFoundError as exc:
+        if optional:
+            return {}
+        raise TTSError(f"Cannot read configuration '{path}': {exc}") from exc
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise TTSError(f"Cannot read configuration '{path}': {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise TTSError(f"Configuration '{path}' must be a YAML mapping.")
+    actions = {
+        action.dest: action for action in parser._actions
+        if action.dest in _CONFIG_OPTIONS
+    }
+    result = {}
+    settings = settings_values()
+    for key, value in data.items():
+        if isinstance(key, str) and key in settings:
+            try:
+                result[key] = validate_setting(key, value)
+            except TTSError as exc:
+                raise TTSError(f"Configuration '{path}': {exc}") from exc
+            continue
+        if not isinstance(key, str) or key not in actions:
+            raise TTSError(
+                f"Unknown configuration option {key!r} in '{path}'."
+            )
+        action = actions[key]
+        if value is None and key in {"voice", "format", "dictionary"}:
+            result[key] = None
+            continue
+        if key in {"display", "dictionary_ignore_case", "no_daemon"}:
+            valid = isinstance(value, bool)
+        elif key in {"speed", "max_pause"}:
+            valid = (
+                isinstance(value, (int, float)) and not isinstance(value, bool)
+            )
+        elif key == "mp3_quality":
+            valid = isinstance(value, int) and not isinstance(value, bool)
+        else:
+            valid = isinstance(value, str) and bool(value)
+        if not valid:
+            raise TTSError(
+                f"Invalid value for '{key}' in '{path}': {value!r}."
+            )
+        try:
+            converted = action.type(value) if action.type else value
+        except (
+            ValueError, TypeError, OverflowError, argparse.ArgumentTypeError
+        ) as exc:
+            raise TTSError(
+                f"Invalid value for '{key}' in '{path}': {exc}"
+            ) from exc
+        if action.choices is not None and converted not in action.choices:
+            raise TTSError(
+                f"Invalid value for '{key}' in '{path}': {value!r}."
+            )
+        result[key] = converted
+    return result
 
 
 def _package_version() -> str:
@@ -172,11 +271,20 @@ def build_parser() -> argparse.ArgumentParser:
         voice_explicit=False,
         format_explicit=False,
         dictionary_explicit=False,
+        display_explicit=False,
+        dictionary_ignore_case_explicit=False,
     )
     parser.add_argument(
         "--version",
         action="version",
         version=f"BTS - Book To Speech {_package_version()}",
+    )
+    parser.add_argument(
+        "--cfg",
+        nargs="?",
+        const="",
+        metavar="FILE",
+        help="Print configuration, or load FILE for this invocation.",
     )
     parser.add_argument(
         "text",
@@ -231,7 +339,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--display",
-        action="store_true",
+        action=_StoreExplicitTrue,
+        default=False,
         help=(
             "Display text on screen and highlight words in real-time as "
             "they are spoken."
@@ -304,7 +413,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Audio format of the files created with --output: 'flac' or "
             "'mp3' (variable bitrate, needs ffmpeg with libmp3lame). If "
             "omitted, it is taken from the extension of the file name, or "
-            "it is 'flac'."
+            "it is the configured default (MP3 by default)."
         ),
     )
     parser.add_argument(
@@ -335,7 +444,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--dictionary-ignore-case",
-        action="store_true",
+        action=_StoreExplicitTrue,
+        default=False,
         help="Match the words of --dictionary regardless of capitalization.",
     )
     parser.add_argument(
@@ -832,6 +942,10 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 args.dictionary
                 if args.dictionary_explicit else None
             ),
+            default_language=args.lang,
+            default_voice=args.voice,
+            default_format=args.format or current_settings().default_format,
+            default_dictionary=args.dictionary,
             dictionary_ignore_case=args.dictionary_ignore_case,
             speed=args.speed,
             device=args.device,
@@ -848,11 +962,11 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             or args.clipboard
             or args.project is not None
             or args.output is not None
-            or args.format is not None
-            or args.dictionary is not None
-            or args.dictionary_ignore_case
-            or args.display
-            or args.voice is not None
+            or args.format_explicit
+            or args.dictionary_explicit
+            or args.dictionary_ignore_case_explicit
+            or args.display_explicit
+            or args.voice_explicit
             or args.sections_list
             or args.section_start is not None
             or args.test is not None
@@ -941,9 +1055,9 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             or args.sections_list
             or args.section_start is not None
             or args.output is not None
-            or args.dictionary is not None
-            or args.format is not None
-            or args.voice is not None
+            or args.dictionary_explicit
+            or args.format_explicit
+            or args.voice_explicit
             or args.text is not None
         ):
             parser.error(
@@ -1004,7 +1118,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         )
 
     if args.epub:
-        audio_format = args.format or "flac"
+        audio_format = args.format or current_settings().default_format
         streaming = args.output is None and not args.sections_list
         exporting_mp3 = args.output is not None and audio_format == "mp3"
         device = "cpu"
@@ -1025,6 +1139,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                         "output": args.output,
                         "format": audio_format,
                         "mp3_quality": args.mp3_quality,
+                        "settings": asdict(current_settings()),
                         "section_start": args.section_start,
                         "dictionary": args.dictionary,
                         "dictionary_ignore_case": (
@@ -1094,6 +1209,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                     "device": args.device,
                     "format": audio_format,
                     "mp3_quality": args.mp3_quality,
+                    "settings": asdict(current_settings()),
                     "dictionary": args.dictionary,
                     "dictionary_ignore_case": (
                         args.dictionary_ignore_case
@@ -1138,6 +1254,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 "device": args.device,
                 "dictionary": args.dictionary,
                 "dictionary_ignore_case": args.dictionary_ignore_case,
+                "settings": asdict(current_settings()),
             }
         )
         if result is not None:
@@ -1180,9 +1297,29 @@ def main(argv: list | None = None) -> int:
         else build_parser()
     )
     argcomplete.autocomplete(parser)
-    args = parser.parse_args(_argv)
     try:
-        return run(args, parser)
+        args = parser.parse_args(_argv)
+        defaults = _load_config(_config_path(), parser, optional=True)
+        if args.cfg:
+            defaults.update(_load_config(Path(args.cfg), parser))
+        parser.set_defaults(**{
+            key: value for key, value in defaults.items()
+            if key in _CONFIG_OPTIONS
+        })
+        args = parser.parse_args(_argv)
+        runtime = {
+            key: value for key, value in defaults.items()
+            if key in settings_values()
+        }
+        with use_settings(runtime):
+            if args.cfg == "":
+                config = {
+                    key: parser.get_default(key) for key in _CONFIG_OPTIONS
+                }
+                config.update(asdict(current_settings()))
+                print(yaml.safe_dump(config, sort_keys=True), end="")
+                return 0
+            return run(args, parser)
     except GpuMemoryError as exc:
         print(f"Warning: {exc}", file=sys.stderr)
         return EXIT_GPU_BUSY

@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from ebooklib import epub as _ebooklib_epub
 
 from bts import dictionary, epub, errors
+from bts.settings import use_settings
 
 
 def make_section(index, title, body="x" * 50, heading=True):
@@ -106,6 +107,13 @@ def test_load_sections_without_epub_support(monkeypatch, tmp_path):
 def test_get_section_body_strips_heading():
     section = make_section(1, "Title", "Some body text here")
     assert epub.get_section_body(section) == "Some body text here"
+
+
+def test_configured_minimum_section_length():
+    section = make_section(1, "", "short", heading=False)
+    assert epub.get_section_body(section) == ""
+    with use_settings({"min_section_chars": 4}):
+        assert epub.get_section_body(section) == "short"
 
 
 def test_get_section_body_without_heading():

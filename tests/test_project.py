@@ -184,6 +184,34 @@ def test_build_project_uses_defaults_and_warns_for_missing_dictionary(
     assert kwargs["audio_format"] == "flac"
 
 
+def test_build_project_config_defaults_yield_to_project_settings(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "story.txt"
+    source.write_text("Hello.", encoding="utf-8")
+    project_file = write_build_project(
+        tmp_path, source, [{"type": "source", "id": 1, "name": "default"}],
+        Language="us", Dictionary="default",
+    )
+    generated = []
+    monkeypatch.setattr(project, "validate_voice", lambda *_args: None)
+    monkeypatch.setattr(project, "resolve_device", lambda device: device)
+    monkeypatch.setattr(
+        project, "synthesize_epub_section_to_file",
+        lambda *args, **kwargs: generated.append((args, kwargs)),
+    )
+
+    assert project.build_project(
+        str(project_file), output_dir=str(tmp_path / "audio"),
+        default_language="fr", default_voice="ff_siwis", default_format="mp3",
+    ) == 0
+    args, kwargs = generated[0]
+    assert kwargs["lang_code"] == "us"
+    assert kwargs["voice"] == "ff_siwis"
+    assert kwargs["audio_format"] == "mp3"
+    assert str(args[2]).endswith(".mp3")
+
+
 def test_build_project_uses_pattern_and_cli_overrides(
     tmp_path, monkeypatch, capsys
 ):

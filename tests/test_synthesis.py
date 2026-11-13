@@ -4,6 +4,7 @@ import pytest
 import soundfile as sf
 
 from bts import constants, errors, phonemes, synthesis, textio
+from bts.settings import use_settings
 
 
 @pytest.fixture
@@ -28,6 +29,23 @@ def test_generate_speech_ignores_configured_strings(fake_pipeline):
         )
     )
     assert fake_pipeline.calls[0][0] == "hola"
+
+
+def test_configured_markers_and_ignored_strings(fake_pipeline):
+    with use_settings({
+        "ignored_strings": ["_"],
+        "pause_markers": {"...": 0.2, ".": 0.1},
+    }):
+        out = list(synthesis.generate_speech(
+            fake_pipeline, "e", "ho_la...adios", "ef_dora", 1.0
+        ))
+    assert [text for text, _ in out] == ["hola", "", "adios"]
+    assert len(out[1][1]) == int(constants.SAMPLE_RATE * 0.2)
+    with use_settings({"pause_markers": {}}):
+        out = list(synthesis.generate_speech(
+            fake_pipeline, "e", "hola! adios", "ef_dora", 1.0
+        ))
+    assert [text for text, _ in out] == ["hola! adios"]
 
 
 def test_em_dash_inserts_half_second_silence(fake_pipeline):
@@ -145,6 +163,38 @@ def test_play_title_then_pause_then_body(
     assert len(writes[1]) == pause and not writes[1].any()
     assert use_pipeline.calls[0] == ("Title", "ef_dora", 2.0 * constants.TITLE_SPEED)
     assert use_pipeline.calls[1] == ("body", "ef_dora", 2.0)
+
+
+def test_configured_title_speed_and_pause_apply_to_play_and_export(
+    monkeypatch, use_pipeline, fake_player, tmp_path
+):
+    monkeypatch.setattr(synthesis, "AudioPlayer", fake_player)
+    with use_settings({"title_speed": 0.5, "title_pause_seconds": 0.1}):
+        synthesis.synthesize_and_play("body", lang_code="es", title="Title")
+        synthesis.synthesize_epub_section_to_file(
+            "Title", "body", str(tmp_path / "out.flac"), lang_code="es"
+        )
+    assert use_pipeline.calls[0][2] == 0.5
+    assert use_pipeline.calls[2][2] == 0.5
+    assert len(fake_player.instances[0].writes[1]) == 2400
+    assert sf.info(str(tmp_path / "out.flac")).frames == 2880
+
+
+def test_configured_chunk_lengths(monkeypatch, fake_pipeline):
+    chunks = []
+    original = synthesis.split_into_chunks
+
+    def record(text, limit):
+        chunks.append(limit)
+        return original(text, limit)
+
+    monkeypatch.setattr(synthesis, "split_into_chunks", record)
+    with use_settings({"max_chunk_chars": 6, "phoneme_chunk_chars": 5}):
+        assert textio.split_into_chunks("One. Two.") == ["One.", "Two."]
+        list(synthesis.generate_speech(
+            fake_pipeline, "e", "hi [x](/y/)", "v", 1.0
+        ))
+    assert chunks == [5]
 
 
 def test_play_title_only(monkeypatch, use_pipeline, fake_player):
@@ -308,9 +358,9 @@ def test_resolve_audio_output(tmp_path):
         "A.FLAC", "flac",
     )
     assert textio.resolve_audio_output("a", "mp3", None) == ("a.mp3", "mp3")
-    assert textio.resolve_audio_output("a", None, None) == ("a.flac", "flac")
+    assert textio.resolve_audio_output("a", None, None) == ("a.mp3", "mp3")
     assert textio.resolve_audio_output("", None, "story") == (
-        "story.flac", "flac",
+        "story.mp3", "mp3",
     )
 
 

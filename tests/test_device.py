@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from bts import device, errors
+from bts.settings import use_settings
 
 
 def fake_torch(available=True, free_mib=4096, total_mib=8192, mem_error=None):
@@ -106,6 +107,40 @@ def test_get_pipeline_is_cached(monkeypatch):
     assert len(created) == 1
     assert created[0]["lang_code"] == "e"
     device.get_pipeline.cache_clear()
+
+
+def test_configured_repo_is_part_of_both_pipeline_cache_keys(monkeypatch):
+    created = []
+
+    class Pipeline:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+    monkeypatch.setattr(device, "get_kpipeline_class", lambda: Pipeline)
+    device.get_pipeline.cache_clear()
+    device.get_g2p_pipeline.cache_clear()
+    try:
+        with use_settings({"repo_id": "first/model"}):
+            first = device.get_pipeline("e", "cpu")
+            first_g2p = device.get_g2p_pipeline("e")
+        with use_settings({"repo_id": "second/model"}):
+            assert device.get_pipeline("e", "cpu") is not first
+            assert device.get_g2p_pipeline("e") is not first_g2p
+        assert [item["repo_id"] for item in created] == [
+            "first/model", "first/model", "second/model", "second/model"
+        ]
+    finally:
+        device.get_pipeline.cache_clear()
+        device.get_g2p_pipeline.cache_clear()
+
+
+def test_configured_gpu_memory_threshold(monkeypatch):
+    patch_torch(monkeypatch, free_mib=500)
+    with use_settings({"gpu_min_free_mib": 400}):
+        assert device.resolve_device("auto") == "cuda"
+    with use_settings({"gpu_min_free_mib": 600}):
+        assert device.gpu_has_room()[0] is False
+        assert "600 MiB" in device.gpu_has_room()[1]
 
 
 def test_get_pipeline_translates_oom(monkeypatch):
