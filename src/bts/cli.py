@@ -40,6 +40,7 @@ Examples:
     bts --epub book.epub --analyze
     bts --epub book.epub --analyze --ipa
     bts --epub book.epub --analyze --lang es --ipa us
+    bts --ipa es "Hola mundo"
     bts --clipboard
 
 
@@ -60,12 +61,13 @@ import sys
 import argcomplete
 from argcomplete.completers import ChoicesCompleter
 
-from bts.analysis import run_analysis
+from bts.analysis import add_phonemes, run_analysis
 from bts.audio import require_ffplay, require_mp3_encoder
 from bts.constants import (
     AUDIO_FORMATS,
     DEFAULT_MAX_PAUSE_SECONDS,
     DEFAULT_MP3_QUALITY,
+    DICTIONARY_SEPARATOR,
     EXIT_GPU_BUSY,
 )
 from bts.device import resolve_device
@@ -361,7 +363,8 @@ def build_parser() -> argparse.ArgumentParser:
             "would use, as 'word|[word](/phonemes/)', so that they can be "
             "corrected by hand. They are generated with the language of "
             "--lang, or with LANG if it is given (for example, English "
-            "names in a Spanish book: --lang es --ipa us)."
+            "names in a Spanish book: --lang es --ipa us). Without "
+            "--analyze, print a dictionary entry for the text argument."
         ),
     )
     ipa_action.completer = ChoicesCompleter(sorted(SUPPORTED_LANGUAGES))
@@ -836,6 +839,51 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             max_pause_seconds=args.max_pause,
         )
 
+    if args.ipa is not None and not args.analyze:
+        if (
+            args.text is None
+            or args.text == "-"
+            or args.epub
+            or args.text_file
+            or args.clipboard
+            or args.project is not None
+            or args.output is not None
+            or args.format is not None
+            or args.dictionary is not None
+            or args.dictionary_ignore_case
+            or args.display
+            or args.voice is not None
+            or args.sections_list
+            or args.section_start is not None
+            or args.test is not None
+            or args.list_languages
+            or args.list_voices is not None
+        ):
+            parser.error(
+                "--ipa without --analyze requires a text argument and "
+                "cannot be combined with source, output, dictionary, "
+                "display, voice, section, test, or listing options."
+            )
+        if args.ipa and args.ipa not in SUPPORTED_LANGUAGES:
+            parser.error(
+                f"--ipa: unsupported language '{args.ipa}'. Use "
+                "--list-languages to view the available codes."
+            )
+        text = args.text.strip()
+        if not text or text.startswith("#") or any(
+            char in text for char in (DICTIONARY_SEPARATOR, "\n", "\r")
+        ):
+            raise TTSError(
+                "Text for --ipa must be a non-empty dictionary entry "
+                "without '|', line breaks, or a leading '#'."
+            )
+        entries, missing = add_phonemes([text], args.ipa or args.lang)
+        if missing:
+            raise TTSError(f"Cannot generate phonemes for '{text}'.")
+        word, replacement = entries[0]
+        print(f"{word}{DICTIONARY_SEPARATOR}{replacement}")
+        return 0
+
     if args.list_languages:
         show_languages()
         return 0
@@ -934,8 +982,6 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         )
 
     if args.ipa is not None:
-        if not args.analyze:
-            parser.error("--ipa requires --analyze.")
         if args.ipa and args.ipa not in SUPPORTED_LANGUAGES:
             parser.error(
                 f"--ipa: unsupported language '{args.ipa}'. Use "

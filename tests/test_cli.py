@@ -5,7 +5,8 @@ import sys
 
 import pytest
 
-from bts import cli
+from bts import analysis, cli
+from bts.dictionary import PronunciationDictionary
 
 
 def parse(*argv):
@@ -146,6 +147,65 @@ def test_run_analyze_with_ipa_lang_dispatches(monkeypatch):
     monkeypatch.setattr(cli, "run_analysis", fake_analysis)
     run("--analyze", "--text", "a.txt", "--lang", "es", "--ipa", "us")
     assert captured == {"ipa": "us", "lang": "es"}
+
+
+@pytest.mark.parametrize(
+    ("argv", "language", "text", "replacement"),
+    [
+        (("--ipa", "es", "Hola mundo"), "e", "Hola mundo",
+         "[Holamundo](/HOLA MUNDO/)"),
+        (("Hello", "--lang", "us", "--ipa"), "a", "Hello",
+         "[Hello](/HELLO/)"),
+        (("--lang", "es", "--ipa", "us", "Hello"), "a", "Hello",
+         "[Hello](/HELLO/)"),
+    ],
+)
+def test_ipa_text_prints_dictionary_entry_without_playback(
+    monkeypatch, fake_pipeline, spy, capsys, argv, language, text, replacement
+):
+    seen = []
+    monkeypatch.setattr(
+        analysis, "get_g2p_pipeline",
+        lambda code: seen.append(code) or fake_pipeline,
+    )
+
+    assert run(*argv) == 0
+    assert seen == [language]
+    assert capsys.readouterr().out == f"{text}|{replacement}\n"
+    lexicon = PronunciationDictionary({text: replacement})
+    assert lexicon.apply(text) == replacement
+    assert not spy
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("--ipa", "xx", "hola"),
+        ("--ipa", "es", "hola", "--output", "file.flac"),
+        ("--ipa", "es", "hola", "--text", "file.txt"),
+        ("--ipa", "es", "-"),
+    ],
+)
+def test_ipa_text_rejects_invalid_combinations(argv):
+    with pytest.raises(SystemExit) as exc:
+        run(*argv)
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("text", ["  ", "a|b", "#comment", "a\nb"])
+def test_ipa_text_rejects_invalid_dictionary_entries(text):
+    with pytest.raises(cli.TTSError, match="dictionary entry"):
+        run("--ipa", "es", text)
+
+
+def test_ipa_text_reports_missing_phonemes(monkeypatch, fake_pipeline, capsys):
+    fake_pipeline.g2p = lambda text: ("", None)
+    monkeypatch.setattr(
+        analysis, "get_g2p_pipeline", lambda code: fake_pipeline
+    )
+    with pytest.raises(cli.TTSError, match="Cannot generate phonemes"):
+        run("--ipa", "es", "hola")
+    assert capsys.readouterr().out == ""
 
 
 # --- run -------------------------------------------------------------------

@@ -217,7 +217,7 @@ los del proyecto y se avisa cuando reemplazan un valor explícito del archivo.
 | Opción | Descripción |
 |---|---|
 | `--analyze` | Genera un fichero `.dict` con las palabras desconocidas del texto. |
-| `--ipa [LANG]` | Con `--analyze`, añade las fonemas IPA de Kokoro para cada palabra. Si se indica `LANG`, usa ese idioma para los fonemas (p. ej. nombres ingleses en un libro español: `--lang es --ipa us`). |
+| `--ipa [LANG]` | Con `--analyze`, añade los fonemas IPA de Kokoro para cada palabra. Con texto directo, muestra una entrada de diccionario. Usa `LANG` si se indica; si no, usa `--lang`. |
 
 ### Secciones (solo EPUB)
 
@@ -374,7 +374,10 @@ abortar; no hace falta pulsar Intro. Al terminar se pregunta si guardar los
 cambios. Si se aborta, el progreso y la marca de la entrada pendiente se
 guardan solo si se confirma esa pregunta; al responder que no, el fichero
 queda intacto. Los cambios se mantienen temporalmente hasta confirmar que se
-guarden.
+guarden. En cada entrada `palabra|pronunciación`, primero se pronuncia la
+palabra original, se hace una pausa y después se escucha la pronunciación del
+diccionario (incluidos los fonemas IPA entre corchetes). Ambas se reproducen
+a la velocidad seleccionada.
 
 **Opciones del análisis:**
 ```bash
@@ -491,6 +494,16 @@ bts --epub libro.epub --analyze --ipa
 Esto genera `libro.dict` con una entrada `palabra|[palabra](/fonemas/)` por
 cada palabra que Hunspell no reconoce. Los fonemas son los que Kokoro usaría
 por defecto, listos para revisar y corregir a mano.
+
+Para obtener una entrada para una palabra o frase sin generar audio:
+
+```bash
+bts --ipa es "Hola mundo"
+bts "Hello" --lang us --ipa
+```
+
+La entrada se imprime en pantalla con el mismo formato del diccionario.
+Sin un idioma después de `--ipa`, se utiliza `--lang`.
 
 ---
 

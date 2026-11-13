@@ -11,6 +11,7 @@ from pathlib import Path
 
 from bts.dictionary import PronunciationDictionary
 from bts.errors import TTSError
+from bts.numbers import prepare_text
 from bts.synthesis import synthesize_and_play
 
 _PENDING_MARKER = "# BTS REVIEW PENDING"
@@ -59,15 +60,17 @@ def _is_pending_marker(line: str) -> bool:
 
 def _speak_entry(line: str, lang_code: str, voice: str | None,
                  speed: float, device: str, max_pause_seconds: float) -> None:
-    """Speak the source word using this line's own replacement."""
+    """Speak the source word, pause, then speak its dictionary pronunciation."""
     content = _LINE_ENDING_RE.sub("", line).lstrip("\ufeff")
     print(content)
+    title = ""
     if "|" in content:
         word, replacement = content.split("|", 1)
         word, replacement = word.strip(), replacement.split("|", 1)[0].strip()
         if not word:
             spoken = content.strip()
         else:
+            title = prepare_text(word, lang_code, PronunciationDictionary({}))
             try:
                 spoken = PronunciationDictionary(
                     {word: replacement}
@@ -86,6 +89,8 @@ def _speak_entry(line: str, lang_code: str, voice: str | None,
         display=False,
         speed=speed,
         device=device,
+        title=title,
+        title_speed_factor=1.0,
         max_pause_seconds=max_pause_seconds,
     )
 

@@ -193,6 +193,7 @@ def synthesize_and_play(
     title: str = "",
     checkpoint: Callable[[], None] | None = None,
     max_pause_seconds: float = DEFAULT_MAX_PAUSE_SECONDS,
+    title_speed_factor: float = TITLE_SPEED,
 ) -> None:
     """Generate speech from text and stream it to ``ffplay``.
 
@@ -203,8 +204,9 @@ def synthesize_and_play(
         display: If True, show the text with a moving word highlight.
         speed: Speech speed multiplier.
         device: ``"cpu"`` or ``"cuda"``.
-        title: Optional heading read first, slower, followed by a pause,
-            in the same audio stream as the text.
+        title: Optional heading read first, slower by default, followed by
+            a pause, in the same audio stream as the text.
+        title_speed_factor: Multiplier applied to speed for the title.
 
     Raises:
         PlayerNotFoundError: If ``ffplay`` is not installed.
@@ -226,7 +228,7 @@ def synthesize_and_play(
         if title:
             yield from generate_speech(
                 pipeline, internal, title, selected_voice,
-                speed * TITLE_SPEED,
+                speed * title_speed_factor,
                 max_pause_seconds,
             )
             yield "", np.zeros(

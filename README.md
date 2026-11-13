@@ -103,7 +103,6 @@ ruff check src tests
 | `tests/` | Unit tests (180, all mocked) |
 | `docs/` | Documentation |
 | `scripts/` | Helper shell scripts |
-| `legacy/` | Old prototypes, kept for reference |
 
 ## License
 

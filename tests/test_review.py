@@ -1,6 +1,10 @@
 """Interactive pronunciation-dictionary review."""
 
-from bts import review
+import pytest
+
+from bts import constants, review, synthesis
+from bts.dictionary import PronunciationDictionary
+from bts.numbers import prepare_text
 
 
 def test_review_repeats_deletes_keeps_and_resumes_at_pending_line(
@@ -83,7 +87,9 @@ def test_abort_discards_changes_and_pending_marker_when_not_saved(
     assert path.read_text(encoding="utf-8") == original
 
 
-def test_speaking_review_entry_shows_only_plain_line(monkeypatch, capsys):
+def test_speaking_review_entry_compares_source_and_replacement(
+    monkeypatch, capsys
+):
     spoken = {}
     monkeypatch.setattr(
         review,
@@ -103,3 +109,68 @@ def test_speaking_review_entry_shows_only_plain_line(monkeypatch, capsys):
     assert capsys.readouterr().out == "alpha|uno\n"
     assert spoken["text"] == "uno"
     assert spoken["display"] is False
+    assert spoken["title"] == "alpha"
+    assert spoken["title_speed_factor"] == 1.0
+
+
+def test_speaking_review_entry_compares_source_and_ipa(
+    monkeypatch, capsys
+):
+    spoken = {}
+    monkeypatch.setattr(
+        review,
+        "synthesize_and_play",
+        lambda text, **kwargs: spoken.update(text=text, **kwargs),
+    )
+
+    review._speak_entry(
+        "alpha|[ˈælfə]\n",
+        lang_code="es",
+        voice=None,
+        speed=1.0,
+        device="cpu",
+        max_pause_seconds=0.5,
+    )
+
+    assert capsys.readouterr().out == "alpha|[ˈælfə]\n"
+    assert spoken["title"] == "alpha"
+    assert spoken["text"] == "[alpha](/ˈælfə/)"
+
+
+@pytest.mark.parametrize(
+    ("word", "replacement", "expected_source", "expected_ipa"),
+    [
+        ("asus", "[ˈAsəs]", "asus", "ˈAsəs"),
+        ("asus", "[asus](/ˈAsəs/)", "asus", "ˈAsəs"),
+        ("3", "[tɾes]", "tres", "tɾes"),
+    ],
+)
+def test_review_source_matches_normal_synthesis(
+    monkeypatch, fake_pipeline, fake_player,
+    word, replacement, expected_source, expected_ipa,
+):
+    monkeypatch.setattr(synthesis, "get_pipeline", lambda lang, dev: fake_pipeline)
+    monkeypatch.setattr(synthesis, "AudioPlayer", fake_player)
+    speed = 1.3
+    synthesis.synthesize_and_play(
+        prepare_text(word, "es", PronunciationDictionary({})),
+        lang_code="es",
+        speed=speed,
+    )
+    normal_call = fake_pipeline.calls.pop()
+    normal_audio = fake_player.instances[0].writes[0]
+
+    review._speak_entry(
+        f"{word}|{replacement}\n", "es", None, speed, "cpu", 0
+    )
+
+    assert normal_call == (expected_source, "ef_dora", speed)
+    assert fake_pipeline.calls == [normal_call]
+    assert fake_pipeline.token_calls == [(expected_ipa, "ef_dora", speed)]
+    writes = fake_player.instances[1].writes
+    assert len(writes) == 3
+    assert (writes[0] == normal_audio).all()
+    assert len(writes[1]) == int(
+        constants.SAMPLE_RATE * constants.TITLE_PAUSE_SECONDS
+    )
+    assert not writes[1].any()
