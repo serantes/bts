@@ -69,6 +69,9 @@ PID_PATH = _STATE_DIR / "daemon.pid"
 #: Log file created when the daemon is started in background mode.
 LOG_PATH = _STATE_DIR / "daemon.log"
 
+#: Default pronunciation dictionary shared by CLI and daemon requests.
+DEFAULT_DICTIONARY_PATH = _STATE_DIR / "default.dict"
+
 #: Default inactivity timeout (seconds).  The daemon exits after this many
 #: seconds without receiving a request.  Zero means "never".
 DEFAULT_INACTIVITY_TIMEOUT = 30 * 60
@@ -715,7 +718,11 @@ class BTSDaemon:
         """Return a :class:`PronunciationDictionary` from the request."""
         from bts.dictionary import PronunciationDictionary, load_dictionary
 
+        if request.get("dictionary_disabled", False):
+            return PronunciationDictionary({})
         dict_path = request.get("dictionary")
+        if not dict_path and DEFAULT_DICTIONARY_PATH.is_file():
+            dict_path = str(DEFAULT_DICTIONARY_PATH)
         if not dict_path:
             return PronunciationDictionary({})
         ignore_case = request.get("dictionary_ignore_case", False)

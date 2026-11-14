@@ -56,6 +56,7 @@ import argparse
 import math
 import os
 import select
+import shlex
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -430,12 +431,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dictionary",
         action=_StoreExplicit,
-        metavar="FILE",
+        metavar="FILE|disabled|edit",
         help=(
             "Pronunciation dictionary: a UTF-8 text file with one "
             "'word|replacement' per line (for example 'mr|mister'). "
             "With --analyze it is, instead, the name of the file to "
             "create. "
+            "Use 'disabled' to disable dictionaries, or 'edit' to edit "
+            "the default dictionary. "
             "The replacement is spoken instead of the word; if it is "
             "written between square brackets it is read as phonemes "
             "('mr|[mˈɪstəɹ]'). Lines starting with '#' are comments. "
@@ -811,6 +814,50 @@ def load_lexicon(args: argparse.Namespace) -> PronunciationDictionary:
     return lexicon
 
 
+def _existing_default_dictionary() -> str | None:
+    """Return the shared default dictionary path when it exists."""
+    from bts.daemon import DEFAULT_DICTIONARY_PATH
+
+    return (
+        str(DEFAULT_DICTIONARY_PATH)
+        if DEFAULT_DICTIONARY_PATH.is_file()
+        else None
+    )
+
+
+def _edit_default_dictionary() -> int:
+    """Create the default dictionary if needed and open a console editor."""
+    import subprocess
+
+    from bts.daemon import DEFAULT_DICTIONARY_PATH
+
+    path = DEFAULT_DICTIONARY_PATH
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(exist_ok=True)
+    except OSError as exc:
+        raise TTSError(
+            f"Cannot create default dictionary '{path}': {exc}"
+        ) from exc
+
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+    try:
+        command = shlex.split(editor)
+    except ValueError as exc:
+        raise TTSError(f"Invalid editor command {editor!r}: {exc}") from exc
+    if not command:
+        raise TTSError("The configured editor command is empty.")
+    try:
+        result = subprocess.run([*command, str(path)], check=False)
+    except OSError as exc:
+        raise TTSError(f"Cannot run editor {command[0]!r}: {exc}") from exc
+    if result.returncode:
+        raise TTSError(
+            f"Editor {command[0]!r} exited with status {result.returncode}."
+        )
+    return 0
+
+
 def _stdin_has_data(timeout: float = 2.0) -> bool:
     """Return True if piped input is available on standard input.
 
@@ -907,6 +954,12 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     Returns:
         The process exit status.
     """
+    if args.dictionary == "edit":
+        return _edit_default_dictionary()
+    dictionary_disabled = args.dictionary == "disabled"
+    if dictionary_disabled:
+        args.dictionary = None
+
     if args.build is not None:
         if (
             args.project is not None
@@ -939,13 +992,18 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 args.format if args.format_explicit else None
             ),
             dictionary_override=(
-                args.dictionary
-                if args.dictionary_explicit else None
+                ""
+                if dictionary_disabled
+                else args.dictionary if args.dictionary_explicit else None
             ),
             default_language=args.lang,
             default_voice=args.voice,
             default_format=args.format or current_settings().default_format,
-            default_dictionary=args.dictionary,
+            default_dictionary=(
+                args.dictionary
+                if args.dictionary or args.dictionary_explicit
+                else _existing_default_dictionary()
+            ),
             dictionary_ignore_case=args.dictionary_ignore_case,
             speed=args.speed,
             device=args.device,
@@ -1074,11 +1132,18 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         return 0
 
     # Auto-detect a .dict file that matches the epub name.
-    if args.epub and not args.dictionary:
+    if args.epub and not args.dictionary and not args.dictionary_explicit:
         candidate = os.path.splitext(args.epub)[0] + ".dict"
         if os.path.isfile(candidate):
             args.dictionary = candidate
             print(f"[INFO] Auto-loading dictionary '{candidate}'.")
+
+    if (
+        not args.dictionary
+        and not args.dictionary_explicit
+        and not args.analyze
+    ):
+        args.dictionary = _existing_default_dictionary()
 
     if args.test:
         lang = args.test.lower()
@@ -1142,6 +1207,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                         "settings": asdict(current_settings()),
                         "section_start": args.section_start,
                         "dictionary": args.dictionary,
+                        "dictionary_disabled": dictionary_disabled,
                         "dictionary_ignore_case": (
                             args.dictionary_ignore_case
                         ),
@@ -1211,6 +1277,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                     "mp3_quality": args.mp3_quality,
                     "settings": asdict(current_settings()),
                     "dictionary": args.dictionary,
+                    "dictionary_disabled": dictionary_disabled,
                     "dictionary_ignore_case": (
                         args.dictionary_ignore_case
                     ),
@@ -1253,6 +1320,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 "max_pause": args.max_pause,
                 "device": args.device,
                 "dictionary": args.dictionary,
+                "dictionary_disabled": dictionary_disabled,
                 "dictionary_ignore_case": args.dictionary_ignore_case,
                 "settings": asdict(current_settings()),
             }

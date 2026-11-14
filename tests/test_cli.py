@@ -429,6 +429,85 @@ def test_run_text_applies_dictionary(spy, tmp_path):
     assert spy["play"][0] == "adios mundo"
 
 
+def test_run_uses_default_dictionary(spy, tmp_path, monkeypatch):
+    from bts import daemon
+
+    dictionary = tmp_path / "default.dict"
+    dictionary.write_text("hola|adios\n", encoding="utf-8")
+    monkeypatch.setattr(daemon, "DEFAULT_DICTIONARY_PATH", dictionary)
+
+    assert run("hola mundo", "--no-daemon") == 0
+    assert spy["play"][0] == "adios mundo"
+
+
+def test_default_dictionary_is_sent_to_daemon(tmp_path, monkeypatch):
+    from bts import client, daemon
+
+    dictionary = tmp_path / "default.dict"
+    dictionary.write_text("hola|adios\n", encoding="utf-8")
+    monkeypatch.setattr(daemon, "DEFAULT_DICTIONARY_PATH", dictionary)
+    requests = []
+    monkeypatch.setattr(
+        client, "try_daemon_request",
+        lambda request: requests.append(request) or 0,
+    )
+
+    assert run("hola") == 0
+    assert requests[0]["dictionary"] == str(dictionary)
+
+
+def test_disabled_dictionary_ignores_existing_default(
+    spy, tmp_path, monkeypatch
+):
+    from bts import daemon
+
+    dictionary = tmp_path / "default.dict"
+    dictionary.write_text("hola|adios\n", encoding="utf-8")
+    monkeypatch.setattr(daemon, "DEFAULT_DICTIONARY_PATH", dictionary)
+
+    assert run("hola mundo", "--dictionary", "disabled", "--no-daemon") == 0
+    assert spy["play"][0] == "hola mundo"
+
+
+def test_build_uses_default_dictionary(tmp_path, monkeypatch):
+    from bts import daemon
+
+    dictionary = tmp_path / "default.dict"
+    dictionary.touch()
+    monkeypatch.setattr(daemon, "DEFAULT_DICTIONARY_PATH", dictionary)
+    captured = {}
+    monkeypatch.setattr(
+        cli, "build_project",
+        lambda name, **kwargs: captured.update(kwargs) or 0,
+    )
+
+    assert run("--build", "book") == 0
+    assert captured["default_dictionary"] == str(dictionary)
+
+
+def test_edit_dictionary_creates_and_opens_default(
+    tmp_path, monkeypatch
+):
+    import subprocess
+
+    from bts import daemon
+
+    dictionary = tmp_path / "default.dict"
+    monkeypatch.setattr(daemon, "DEFAULT_DICTIONARY_PATH", dictionary)
+    monkeypatch.setenv("EDITOR", "editor --wait")
+    commands = []
+
+    def edit(command, *, check):
+        commands.append((command, check))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(subprocess, "run", edit)
+
+    assert run("--dictionary", "edit") == 0
+    assert dictionary.is_file()
+    assert commands == [(["editor", "--wait", str(dictionary)], False)]
+
+
 def test_dictionary_display_runs_interactive_dictionary_review(
     monkeypatch, tmp_path
 ):

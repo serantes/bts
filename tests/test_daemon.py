@@ -42,6 +42,36 @@ def task_texts(daemon):
     return [request["text"] for request, _ in daemon._work_queue]
 
 
+def test_build_lexicon_uses_default_dictionary(tmp_path, monkeypatch):
+    from bts import daemon as daemon_module
+
+    dictionary = tmp_path / "default.dict"
+    dictionary.write_text("hola|adios\n", encoding="utf-8")
+    monkeypatch.setattr(
+        daemon_module, "DEFAULT_DICTIONARY_PATH", dictionary
+    )
+
+    lexicon = BTSDaemon()._build_lexicon({"dictionary": None})
+    assert lexicon.apply("hola") == "adios"
+
+
+def test_build_lexicon_disabled_ignores_default_dictionary(
+    tmp_path, monkeypatch
+):
+    from bts import daemon as daemon_module
+
+    dictionary = tmp_path / "default.dict"
+    dictionary.write_text("hola|adios\n", encoding="utf-8")
+    monkeypatch.setattr(
+        daemon_module, "DEFAULT_DICTIONARY_PATH", dictionary
+    )
+
+    lexicon = BTSDaemon()._build_lexicon(
+        {"dictionary": None, "dictionary_disabled": True}
+    )
+    assert lexicon.apply("hola") == "hola"
+
+
 def run_command(daemon, request):
     owns_connection, response, server, client = dispatch(daemon, request)
     server.close()

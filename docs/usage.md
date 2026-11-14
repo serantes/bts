@@ -269,7 +269,15 @@ los del proyecto y se avisa cuando reemplazan un valor explícito del archivo.
 | Opción | Descripción |
 |---|---|
 | `--dictionary FILE` | Fichero de pronunciación (ver [§7](#7-diccionario-de-pronunciación)). Con `--analyze`, es el nombre del fichero a crear. |
+| `--dictionary disabled` | Desactiva los diccionarios, incluido el diccionario por defecto. |
+| `--dictionary edit` | Abre `default.dict` en el editor de consola; lo crea si no existe. |
 | `--dictionary-ignore-case` | Aplica el diccionario sin distinguir mayúsculas. |
+
+Si no se indica un diccionario, BTS busca `default.dict` en el directorio
+compartido con los logs y el daemon (`~/.local/share/bts`). Para un EPUB, un
+diccionario con el mismo nombre que el libro tiene prioridad sobre este
+predeterminado. Al usar `--dictionary edit`, se toma el editor de `VISUAL` o
+`EDITOR`; si ninguna variable está definida, se usa `vi`.
 
 ### Análisis ortográfico
 
