@@ -2,6 +2,7 @@
 
 import struct
 import subprocess
+import threading
 
 import numpy as np
 import pytest
@@ -146,6 +147,14 @@ def test_player_without_audio_launches_nothing(fake_popen):
     assert not fake_popen.created
 
 
+def test_player_can_suppress_status_without_suppressing_errors(fake_popen):
+    with audio.AudioPlayer(show_status=False) as player:
+        player.write(np.zeros(1, dtype=np.float32))
+    command = fake_popen.created[0].command
+    assert "-nostats" in command
+    assert command[command.index("-loglevel") + 1] == "error"
+
+
 def test_player_stops_on_exception(fake_popen):
     with pytest.raises(KeyError):
         with audio.AudioPlayer() as player:
@@ -153,6 +162,38 @@ def test_player_stops_on_exception(fake_popen):
             raise KeyError("x")
     proc = fake_popen.created[0]
     assert proc.terminated and proc.stdin.closed
+
+
+def test_player_interrupts_playback_while_waiting(monkeypatch):
+    cancel = threading.Event()
+    waiting = threading.Event()
+    stopped = threading.Event()
+
+    class BlockingProc(FakeProc):
+        def poll(self):
+            return 0 if stopped.is_set() else None
+
+        def wait(self, timeout=None):
+            waiting.set()
+            assert stopped.wait(2)
+            return 0
+
+        def terminate(self):
+            stopped.set()
+
+    monkeypatch.setattr(subprocess, "Popen", BlockingProc)
+
+    def play():
+        with audio.AudioPlayer(cancel_event=cancel) as player:
+            player.write(np.zeros(1, dtype=np.float32))
+
+    worker = threading.Thread(target=play)
+    worker.start()
+    assert waiting.wait(2)
+    cancel.set()
+    worker.join(2)
+    assert stopped.is_set()
+    assert not worker.is_alive()
 
 
 def test_player_broken_pipe_is_tts_error(monkeypatch):

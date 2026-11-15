@@ -93,8 +93,15 @@ class AudioPlayer:
         "pipe:0",
     ]
 
-    def __init__(self) -> None:
+    def __init__(
+        self, cancel_event: threading.Event | None = None,
+        show_status: bool = True,
+    ) -> None:
         self._proc: subprocess.Popen | None = None
+        self._cancel_event = cancel_event
+        self._show_status = show_status
+        self._finished = threading.Event()
+        self._cancel_thread: threading.Thread | None = None
 
     def __enter__(self) -> AudioPlayer:
         return self
@@ -103,16 +110,23 @@ class AudioPlayer:
         proc = self._proc
         if proc is None:
             return
-        self._close_stdin()
-        if exc_type is None:
-            proc.wait()
-            return
-        proc.terminate()
         try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+            if exc_type is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.terminate()
+            self._close_stdin()
+            if exc_type is None:
+                proc.wait()
+            else:
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+        finally:
+            self._finished.set()
+            if self._cancel_thread is not None:
+                self._cancel_thread.join()
 
     def write(self, samples: np.ndarray) -> None:
         """Send audio samples to the player.
@@ -139,14 +153,35 @@ class AudioPlayer:
 
     def _start(self) -> None:
         """Launch the ``ffplay`` process."""
+        command = self.COMMAND.copy()
+        if not self._show_status:
+            command.insert(-2, "-nostats")
         try:
             self._proc = subprocess.Popen(
-                self.COMMAND, stdin=subprocess.PIPE
+                command, stdin=subprocess.PIPE
             )
         except FileNotFoundError as exc:
             raise PlayerNotFoundError(
                 "'ffplay' (from ffmpeg) is not installed."
             ) from exc
+        if self._cancel_event is not None:
+            self._cancel_thread = threading.Thread(
+                target=self._watch_cancel, daemon=True
+            )
+            self._cancel_thread.start()
+
+    def _watch_cancel(self) -> None:
+        while not self._finished.wait(0.02):
+            if self._cancel_event.is_set():
+                if self._proc.poll() is None:
+                    with contextlib.suppress(ProcessLookupError):
+                        self._proc.terminate()
+                    try:
+                        self._proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        self._proc.kill()
+                        self._proc.wait()
+                return
 
     def _close_stdin(self) -> None:
         """Close the pipe to the player, ignoring a broken pipe."""

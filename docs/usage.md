@@ -439,9 +439,16 @@ bts --epub MiLibro.epub --dictionary MiLibro.dict
 bts --dictionary MiLibro.dict --display
 ```
 
-Durante el repaso se muestra y pronuncia cada línea, sin resaltado. Pulsa
-`Y` para eliminarla, `N` para conservarla, `R` para repetirla o `A` para
-abortar; no hace falta pulsar Intro. Al terminar se pregunta si guardar los
+Antes de mostrar la primera entrada se carga el modelo de voz; esta primera
+carga puede tardar unos segundos. Durante el repaso se muestra y pronuncia
+cada línea, sin resaltado. Pulsa
+`Y` para eliminarla, `N` para conservarla, `R` para repetirla, `E` para
+editarla o `A` para abortar; no hace falta pulsar Intro. Se puede pulsar una
+opción durante la locución para interrumpirla. En el editor, Intro acepta el
+cambio y Esc lo cancela; Ctrl+Z deshace y Ctrl+Shift+Z rehace. Si el terminal
+no distingue Ctrl+Shift+Z de Ctrl+Z, utiliza Ctrl+Y para rehacer. Tras editar
+se muestra la entrada y se vuelve a pedir una opción sin repetir la locución.
+Al terminar se pregunta si guardar los
 cambios. Si se aborta, el progreso y la marca de la entrada pendiente se
 guardan solo si se confirma esa pregunta; al responder que no, el fichero
 queda intacto. Los cambios se mantienen temporalmente hasta confirmar que se

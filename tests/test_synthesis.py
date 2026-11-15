@@ -1,5 +1,7 @@
 """Speech generation: phoneme injection, playback and file export."""
 
+import threading
+
 import pytest
 import soundfile as sf
 
@@ -11,6 +13,30 @@ from bts.settings import use_settings
 def use_pipeline(monkeypatch, fake_pipeline):
     monkeypatch.setattr(synthesis, "get_pipeline", lambda lang, dev: fake_pipeline)
     return fake_pipeline
+
+
+def test_playback_cancelled_during_write_stops_synthesis(
+    monkeypatch, use_pipeline
+):
+    cancel = threading.Event()
+
+    class InterruptedPlayer:
+        def __init__(self, cancel_event, show_status=True):
+            assert cancel_event is cancel
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def write(self, samples):
+            cancel.set()
+            raise errors.TTSError("ffplay stopped")
+
+    monkeypatch.setattr(synthesis, "AudioPlayer", InterruptedPlayer)
+    with pytest.raises(synthesis.SynthesisCancelled):
+        synthesis.synthesize_and_play("hola", cancel_event=cancel)
 
 
 # --- generate_speech ---------------------------------------------------------

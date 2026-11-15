@@ -32,7 +32,7 @@ class FakePlayer:
 
     instances = []
 
-    def __init__(self):
+    def __init__(self, cancel_event=None, show_status=True):
         self.writes = []
         FakePlayer.instances.append(self)
 

@@ -7,6 +7,7 @@ import math
 import os
 import re
 import sys
+import threading
 from typing import TYPE_CHECKING, Callable
 
 import numpy as np
@@ -188,6 +189,8 @@ def synthesize_and_play(
     checkpoint: Callable[[], None] | None = None,
     max_pause_seconds: float = DEFAULT_MAX_PAUSE_SECONDS,
     title_speed_factor: float | None = None,
+    cancel_event: threading.Event | None = None,
+    show_player_status: bool = True,
 ) -> None:
     """Generate speech from text and stream it to ``ffplay``.
 
@@ -201,6 +204,7 @@ def synthesize_and_play(
         title: Optional heading read first, slower by default, followed by
             a pause, in the same audio stream as the text.
         title_speed_factor: Multiplier applied to speed for the title.
+        show_player_status: If False, suppress ffplay's status display.
 
     Raises:
         PlayerNotFoundError: If ``ffplay`` is not installed.
@@ -215,6 +219,8 @@ def synthesize_and_play(
         )
 
     selected_voice = voice or get_default_voice(lang_code)
+    if cancel_event is not None and cancel_event.is_set():
+        raise SynthesisCancelled()
     pipeline = get_pipeline(lang_info["internal"], device)
     internal = lang_info["internal"]
     if title_speed_factor is None:
@@ -241,15 +247,31 @@ def synthesize_and_play(
     karaoke = KaraokeDisplay() if display else None
     completed = False
     try:
-        with AudioPlayer() as player:
+        player_context = AudioPlayer(
+            cancel_event=cancel_event, show_status=show_player_status
+        )
+        with player_context as player:
+            if cancel_event is not None and cancel_event.is_set():
+                raise SynthesisCancelled()
             for graphemes, audio in generator:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise SynthesisCancelled()
                 _checkpoint(checkpoint)
                 samples = to_float32(audio)
-                player.write(samples)
+                try:
+                    player.write(samples)
+                except TTSError:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise SynthesisCancelled() from None
+                    raise
+                if cancel_event is not None and cancel_event.is_set():
+                    raise SynthesisCancelled()
                 if karaoke is not None and graphemes.strip():
                     karaoke.submit(
                         graphemes.strip(), len(samples) / SAMPLE_RATE
                     )
+        if cancel_event is not None and cancel_event.is_set():
+            raise SynthesisCancelled()
         completed = True
     except (TTSError, SynthesisCancelled):
         raise
