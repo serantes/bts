@@ -31,7 +31,7 @@ def test_review_repeats_deletes_keeps_and_resumes_at_pending_line(
         "_speak_entry",
         lambda line, *args: spoken.append(line.split("|", 1)[0]),
     )
-    answers = iter(["R", "Y", "N", "A", "Y"])
+    answers = iter(["P", "Y", "N", "A", "Y"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
 
     options = {
@@ -110,7 +110,7 @@ def test_review_edits_then_repeats_and_saves_or_discards(
     )
     edits = iter(["alpha|dos", "alpha|dos"])
     monkeypatch.setattr(review, "_edit_entry", lambda content: next(edits))
-    answers = iter(["E", "E", "R", "N", save])
+    answers = iter(["E", "E", "P", "N", save])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
 
     review.review_dictionary(
@@ -280,7 +280,8 @@ review.review_dictionary(
         output = wait_for(b"\\a")
         assert output == (
             b"[INFO] Loading speech model...\r\nalpha|uno\r\n"
-            b"Delete? [Y]es, [N]o, [R]epeat, [E]dit, [A]bort: \\a"
+            b"Delete? [Y]es, [N]o, [P]lay again, [E]dit, "
+            b"[U]ndo, [R]edo, [A]bort: \\a"
         )
         os.write(master, b"n")
         wait_for(b"Save changes?")
@@ -412,6 +413,31 @@ def test_review_prepares_model_before_first_entry_once(monkeypatch, tmp_path):
     ]
 
 
+def test_review_undo_redo_and_branching(monkeypatch, tmp_path):
+    path = tmp_path / "words.dict"
+    path.write_text("alpha|uno\nbeta|dos\ngamma|tres\n", encoding="utf-8")
+    spoken = []
+    monkeypatch.setattr(
+        review, "_speak_entry",
+        lambda line, *args: spoken.append(line.split("|", 1)[0]),
+    )
+    answers = iter([
+        "N", "Y", "U", "U", "U", "R", "R", "U", "N", "R", "Y", "Y",
+    ])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+
+    review.review_dictionary(
+        str(path), lang_code="es", voice=None, speed=1,
+        device="cpu", max_pause_seconds=0.5,
+    )
+
+    assert spoken == [
+        "alpha", "beta", "gamma", "beta", "alpha", "alpha", "beta",
+        "gamma", "beta", "gamma", "gamma",
+    ]
+    assert path.read_text(encoding="utf-8") == "alpha|uno\nbeta|dos\n"
+
+
 def test_speech_worker_uses_request_settings(monkeypatch):
     captured = []
     finished = threading.Event()
@@ -491,7 +517,9 @@ def test_review_source_matches_normal_synthesis(
     monkeypatch, fake_pipeline, fake_player,
     word, replacement, expected_source, expected_ipa,
 ):
-    monkeypatch.setattr(synthesis, "get_pipeline", lambda lang, dev: fake_pipeline)
+    monkeypatch.setattr(
+        synthesis, "get_pipeline", lambda lang, dev: fake_pipeline
+    )
     monkeypatch.setattr(synthesis, "AudioPlayer", fake_player)
     speed = 1.3
     synthesis.synthesize_and_play(

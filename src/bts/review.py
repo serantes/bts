@@ -130,12 +130,17 @@ def _decision() -> str:
         answer = _read_key(_PROMPT)
         if answer in _CHOICES:
             return _CHOICES[answer]
-        print("Please press Y, N, R, E, or A.")
+        print("Please press Y, N, P, E, U, R, or A.")
 
 
-_PROMPT = "Delete? [Y]es, [N]o, [R]epeat, [E]dit, [A]bort: "
-_CHOICES = {"y": "yes", "n": "no", "r": "repeat", "e": "edit",
-            "a": "abort"}
+_PROMPT = (
+    "Delete? [Y]es, [N]o, [P]lay again, [E]dit, "
+    "[U]ndo, [R]edo, [A]bort: "
+)
+_CHOICES = {
+    "y": "yes", "n": "no", "p": "repeat", "e": "edit",
+    "u": "undo", "r": "redo", "a": "abort",
+}
 _KEY_BUFFER: deque[str] = deque()
 
 
@@ -370,7 +375,7 @@ def _speak_and_decide(line: str, *args, worker: _SpeechWorker) -> str:
                     cancel.set()
                     worker.check()
                     return _CHOICES[key]
-                print("\nPlease press Y, N, R, E, or A.")
+                print("\nPlease press Y, N, P, E, U, R, or A.")
                 print(_PROMPT, end="", flush=True)
         finally:
             cancel.set()
@@ -415,6 +420,18 @@ def _review_dictionary(
     index = marker_index + 1 if marker_index is not None else 0
     changed = False
     prepared = False
+    undo_stack: list[tuple[list[str], int, int | None, bool]] = []
+    redo_stack: list[tuple[list[str], int, int | None, bool]] = []
+
+    def snapshot() -> tuple[list[str], int, int | None, bool]:
+        return lines.copy(), index, marker_index, changed
+
+    def restore(state: tuple[list[str], int, int | None, bool]) -> None:
+        nonlocal index, marker_index, changed
+        saved_lines, index, marker_index, changed = state
+        lines[:] = saved_lines
+
+    initial_state = snapshot()
 
     while index < len(lines):
         line = lines[index]
@@ -447,6 +464,8 @@ def _review_dictionary(
             while decision == "edit":
                 edited = _edit_entry(content)
                 if edited != content:
+                    undo_stack.append(snapshot())
+                    redo_stack.clear()
                     ending = line[len(_LINE_ENDING_RE.sub("", line)):]
                     bom = "\ufeff" if line.startswith("\ufeff") else ""
                     line = bom + edited + ending
@@ -457,6 +476,18 @@ def _review_dictionary(
                 decision = _decision()
             if decision != "repeat":
                 break
+
+        if decision in {"undo", "redo"}:
+            if decision == "undo":
+                if undo_stack:
+                    redo_stack.append(snapshot())
+                    restore(undo_stack.pop())
+                else:
+                    restore(initial_state)
+            elif redo_stack:
+                undo_stack.append(snapshot())
+                restore(redo_stack.pop())
+            continue
 
         if decision == "abort":
             if marker_index is None:
@@ -469,6 +500,9 @@ def _review_dictionary(
             else:
                 print("[INFO] Dictionary changes discarded.")
             return 0
+
+        undo_stack.append(snapshot())
+        redo_stack.clear()
 
         if marker_index is not None:
             del lines[marker_index]

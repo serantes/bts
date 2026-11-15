@@ -442,8 +442,11 @@ bts --dictionary MiLibro.dict --display
 Antes de mostrar la primera entrada se carga el modelo de voz; esta primera
 carga puede tardar unos segundos. Durante el repaso se muestra y pronuncia
 cada línea, sin resaltado. Pulsa
-`Y` para eliminarla, `N` para conservarla, `R` para repetirla, `E` para
-editarla o `A` para abortar; no hace falta pulsar Intro. Se puede pulsar una
+`Y` para eliminarla, `N` para conservarla, `P` para repetirla, `E` para
+editarla, `U` para deshacer la última decisión o edición, `R` para rehacerla
+o `A` para abortar; no hace falta pulsar Intro. Deshacer en el inicio vuelve
+a mostrar la primera entrada. Si se toma una decisión nueva después de
+deshacer, se descarta la rama que se podía rehacer. Se puede pulsar una
 opción durante la locución para interrumpirla. En el editor, Intro acepta el
 cambio y Esc lo cancela; Ctrl+Z deshace y Ctrl+Shift+Z rehace. Si el terminal
 no distingue Ctrl+Shift+Z de Ctrl+Z, utiliza Ctrl+Y para rehacer. Tras editar
