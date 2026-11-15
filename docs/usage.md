@@ -131,6 +131,10 @@ Las solicitudes de síntesis enviadas al daemon se procesan en orden. Mientras
 una se está procesando, `status` y los controles siguen respondiendo y las
 nuevas solicitudes quedan en cola.
 
+Al reproducir audio, BTS inicia el daemon automáticamente si no está activo y
+envía la solicitud a través de él. Usa `--no-daemon` para ejecutar la síntesis
+en el proceso actual sin iniciar ni usar el daemon.
+
 ```bash
 bts daemon start       # Inicia el daemon si está apagado
 bts daemon status      # Consulta el estado aunque haya una conversión activa

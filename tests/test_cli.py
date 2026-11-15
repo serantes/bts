@@ -381,13 +381,9 @@ def test_ipa_text_reports_missing_phonemes(monkeypatch, fake_pipeline, capsys):
 def spy(monkeypatch):
     """Replace every heavy action with a recorder.
 
-    Also stubs ``try_daemon_request`` to always return ``None`` so the tests
-    are independent of whether a BTS daemon happens to be running in the
-    background.  Without this stub the CLI would delegate to the daemon and
-    bypass the monkeypatched synthesis functions, causing KeyError failures.
+    Stubs daemon requests so the tests reach the monkeypatched synthesis
+    functions without starting a real background daemon.
     """
-    import bts.client as _client
-
     calls = {}
     monkeypatch.setattr(cli, "prepare_synthesis", lambda args, **kw: "cpu")
     monkeypatch.setattr(
@@ -402,9 +398,8 @@ def spy(monkeypatch):
     monkeypatch.setattr(
         cli, "process_epub_book", lambda **kw: calls.update(epub=kw) or 0
     )
-    # Prevent delegation to a live daemon so the stubs above are always
-    # reached.
-    monkeypatch.setattr(_client, "try_daemon_request", lambda req: None)
+    # Prevent delegation to or startup of a daemon.
+    monkeypatch.setattr(cli, "_request_daemon", lambda req: None)
     return calls
 
 
@@ -454,6 +449,44 @@ def test_default_dictionary_is_sent_to_daemon(tmp_path, monkeypatch):
 
     assert run("hola") == 0
     assert requests[0]["dictionary"] == str(dictionary)
+
+
+def test_missing_daemon_is_started_before_request(monkeypatch):
+    import bts.client
+    import bts.daemon
+
+    requests = []
+    starts = []
+
+    def request(req):
+        requests.append(req)
+        return None if len(requests) == 1 else 0
+
+    monkeypatch.setattr(bts.client, "try_daemon_request", request)
+    monkeypatch.setattr(
+        cli, "_daemon_start",
+        lambda foreground, timeout: starts.append((foreground, timeout)) or 0,
+    )
+
+    assert run("hola") == 0
+    assert [request["action"] for request in requests] == ["play", "play"]
+    assert starts == [(False, bts.daemon.DEFAULT_INACTIVITY_TIMEOUT)]
+
+
+def test_daemon_start_failure_falls_back_to_standalone(monkeypatch):
+    import bts.client
+
+    playback = []
+    monkeypatch.setattr(bts.client, "try_daemon_request", lambda req: None)
+    monkeypatch.setattr(cli, "_daemon_start", lambda *args: 0)
+    monkeypatch.setattr(cli, "prepare_synthesis", lambda *args, **kwargs: "cpu")
+    monkeypatch.setattr(
+        cli, "synthesize_and_play",
+        lambda text, **kwargs: playback.append(text),
+    )
+
+    assert run("hola") == 0
+    assert playback == ["hola"]
 
 
 def test_disabled_dictionary_ignores_existing_default(

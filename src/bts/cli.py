@@ -526,8 +526,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="no_daemon",
         help=(
-            "Bypass the daemon and run in standalone mode even if the "
-            "BTS daemon is active."
+            "Do not start or use the BTS daemon; run in standalone mode."
         ),
     )
     return parser
@@ -708,6 +707,18 @@ def _daemon_start(foreground: bool, timeout_seconds: int) -> int:
         "responding yet — it may still be loading the model."
     )
     return 0
+
+
+def _request_daemon(request: dict) -> int | None:
+    """Send a request to the daemon, starting it first if necessary."""
+    from bts.client import try_daemon_request
+    from bts.daemon import DEFAULT_INACTIVITY_TIMEOUT
+
+    result = try_daemon_request(request)
+    if result is None:
+        _daemon_start(False, DEFAULT_INACTIVITY_TIMEOUT)
+        result = try_daemon_request(request)
+    return result
 
 
 def _daemon_stop() -> int:
@@ -1190,9 +1201,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         lexicon = PronunciationDictionary({})
         if not args.sections_list:
             if not args.no_daemon:
-                from bts.client import try_daemon_request
-
-                result = try_daemon_request(
+                result = _request_daemon(
                     {
                         "action": "epub",
                         "epub_path": args.epub,
@@ -1261,9 +1270,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             args.output, args.format, default_name
         )
         if not args.no_daemon:
-            from bts.client import try_daemon_request
-
-            result = try_daemon_request(
+            result = _request_daemon(
                 {
                     "action": "save",
                     "text": text_to_speak,
@@ -1308,9 +1315,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     # Play mode.  --display requires a foreground process (karaoke), so it
     # always runs standalone even if the daemon is active.
     if not args.no_daemon and not args.display:
-        from bts.client import try_daemon_request
-
-        result = try_daemon_request(
+        result = _request_daemon(
             {
                 "action": "play",
                 "text": text_to_speak,
